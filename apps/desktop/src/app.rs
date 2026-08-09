@@ -100,15 +100,22 @@ impl Runtime {
     }
 
     fn register_hotkeys(&mut self) -> Result<()> {
+        let mut registered = Vec::new();
         for (index, binding) in self.config.hotkeys.iter().enumerate() {
             if !binding.enabled {
                 continue;
             }
             let hotkey = HotKey::from_str(&binding.shortcut)
                 .with_context(|| format!("invalid shortcut `{}`", binding.shortcut))?;
-            self.hotkeys
-                .register(hotkey)
-                .with_context(|| format!("shortcut `{}` is unavailable", binding.shortcut))?;
+            if let Err(error) = self.hotkeys.register(hotkey) {
+                if !registered.is_empty() {
+                    let _ = self.hotkeys.unregister_all(&registered);
+                }
+                self.bindings.clear();
+                return Err(error)
+                    .with_context(|| format!("shortcut `{}` is unavailable", binding.shortcut));
+            }
+            registered.push(hotkey);
             self.bindings.insert(hotkey.id(), index);
         }
         Ok(())
