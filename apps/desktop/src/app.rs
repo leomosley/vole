@@ -1,18 +1,21 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
-use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use global_hotkey::hotkey::HotKey;
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
-use tray_icon::menu::{Menu, MenuEvent, MenuItem};
-use tray_icon::{Icon, TrayIconBuilder};
 
-use crate::audio::AudioController;
+use crate::audio::{AudioEngine, PlatformBackend, SessionInfo};
 use crate::catalog::{self, AppEntry};
 use crate::config::{Action, Config, ConfigStore, HotkeyBinding, Operation, Target};
 use crate::{ActionRow, AppWindow, ApplicationRow, HotkeyRow};
+
+#[cfg(windows)]
+use global_hotkey::hotkey::HotKey;
+#[cfg(windows)]
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
+#[cfg(windows)]
+use std::collections::HashMap;
+#[cfg(windows)]
+use std::str::FromStr;
 
 thread_local! {
     static RUNTIME: RefCell<Option<Runtime>> = const { RefCell::new(None) };
@@ -29,16 +32,25 @@ pub fn run() -> Result<()> {
 
     bind_ui(&ui);
     refresh_ui(&ui)?;
+
+    #[cfg(windows)]
     bind_hotkeys(&ui);
+    #[cfg(windows)]
     let tray = create_tray(&ui)?;
+
     ui.window()
         .on_close_requested(|| slint::CloseRequestResponse::HideWindow);
 
     ui.show().context("failed to show VOLE window")?;
     let result = slint::run_event_loop_until_quit().context("VOLE event loop failed");
-    GlobalHotKeyEvent::set_event_handler::<fn(GlobalHotKeyEvent)>(None);
-    MenuEvent::set_event_handler::<fn(MenuEvent)>(None);
-    drop(tray);
+
+    #[cfg(windows)]
+    {
+        GlobalHotKeyEvent::set_event_handler::<fn(GlobalHotKeyEvent)>(None);
+        tray_icon::menu::MenuEvent::set_event_handler::<fn(tray_icon::menu::MenuEvent)>(None);
+        drop(tray);
+    }
+
     RUNTIME.with(|slot| slot.replace(None));
     result
 }
@@ -46,11 +58,13 @@ pub fn run() -> Result<()> {
 struct Runtime {
     store: ConfigStore,
     config: Config,
-    hotkeys: GlobalHotKeyManager,
-    bindings: HashMap<u32, usize>,
-    audio: AudioController,
+    engine: AudioEngine<PlatformBackend>,
     applications: Vec<AppEntry>,
     application_search: String,
+    #[cfg(windows)]
+    hotkeys: GlobalHotKeyManager,
+    #[cfg(windows)]
+    bindings: HashMap<u32, usize>,
 }
 
 impl Runtime {
@@ -58,16 +72,18 @@ impl Runtime {
         Ok(Self {
             store,
             config,
-            hotkeys: GlobalHotKeyManager::new().context("failed to initialize global hotkeys")?,
-            bindings: HashMap::new(),
-            audio: AudioController::new()?,
+            engine: AudioEngine::new(crate::audio::platform_backend()?),
             applications: Vec::new(),
             application_search: String::new(),
+            #[cfg(windows)]
+            hotkeys: GlobalHotKeyManager::new().context("failed to initialize global hotkeys")?,
+            #[cfg(windows)]
+            bindings: HashMap::new(),
         })
     }
 
     fn refresh_applications(&mut self) -> Result<()> {
-        let playing = self.audio.applications().unwrap_or_default();
+        let playing = self.engine.applications().unwrap_or_default();
         self.applications = catalog::build(&playing);
         Ok(())
     }
@@ -101,6 +117,20 @@ impl Runtime {
         self.save_config(config)
     }
 
+    // Runs a binding's actions through the audio engine. This is the single
+    // dispatch path shared by real global hotkeys and the in-app test trigger.
+    // Returns a human message describing what happened so silent no-ops (a
+    // hotkey that matched no audio session) become visible instead of looking
+    // like the app is broken.
+    fn fire(&mut self, index: usize) -> Result<String> {
+        let Some(binding) = self.config.hotkeys.get(index).cloned() else {
+            return Ok("No hotkey to fire.".to_owned());
+        };
+        let outcome = self.engine.apply(&binding)?;
+        Ok(describe_outcome(&binding, outcome))
+    }
+
+    #[cfg(windows)]
     fn register_hotkeys(&mut self) -> Result<()> {
         let mut registered = Vec::new();
         for (index, binding) in self.config.hotkeys.iter().enumerate() {
@@ -123,6 +153,7 @@ impl Runtime {
         Ok(())
     }
 
+    #[cfg(windows)]
     fn unregister_hotkeys(&mut self) -> Result<()> {
         let hotkeys = self
             .config
@@ -144,12 +175,22 @@ impl Runtime {
         Ok(())
     }
 
-    fn handle_hotkey(&mut self, id: u32) -> Result<()> {
+    #[cfg(not(windows))]
+    fn register_hotkeys(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    fn unregister_hotkeys(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn handle_hotkey(&mut self, id: u32) -> Result<String> {
         let Some(&index) = self.bindings.get(&id) else {
-            return Ok(());
+            return Ok(String::new());
         };
-        let binding = &self.config.hotkeys[index];
-        self.audio.apply(binding)
+        self.fire(index)
     }
 }
 
@@ -219,6 +260,25 @@ fn bind_ui(ui: &AppWindow) {
                 }
             })
         });
+    });
+
+    let weak = ui.as_weak();
+    ui.on_test_fire(move |index| {
+        let message = with_runtime(|runtime| runtime.fire(index.max(0) as usize));
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
+        match message {
+            Ok(text) => {
+                let _ = refresh_ui(&ui);
+                ui.set_status_error(false);
+                ui.set_status_text(text.into());
+            }
+            Err(error) => {
+                ui.set_status_error(true);
+                ui.set_status_text(error.to_string().into());
+            }
+        }
     });
 
     let weak = ui.as_weak();
@@ -356,16 +416,13 @@ fn update_ui(weak: &slint::Weak<AppWindow>, status: &str) {
 
 fn refresh_ui(ui: &AppWindow) -> Result<()> {
     with_runtime(|runtime| {
+        let live = runtime.engine.sessions().unwrap_or_default();
         let query = runtime.application_search.to_ascii_lowercase();
         let applications = runtime
             .applications
             .iter()
             .filter(|entry| matches_query(entry, &query))
-            .map(|entry| ApplicationRow {
-                display: entry.display.as_str().into(),
-                executable: entry.executable.as_str().into(),
-                running: entry.running,
-            })
+            .map(|entry| application_row(entry, &live))
             .collect();
         let hotkeys = runtime
             .config
@@ -392,6 +449,22 @@ fn refresh_ui(ui: &AppWindow) -> Result<()> {
         }
         Ok(())
     })
+}
+
+fn application_row(entry: &AppEntry, live: &[SessionInfo]) -> ApplicationRow {
+    let session = live.iter().find(|session| {
+        session
+            .executable
+            .as_deref()
+            .is_some_and(|name| name.eq_ignore_ascii_case(&entry.executable))
+    });
+    ApplicationRow {
+        display: entry.display.as_str().into(),
+        executable: entry.executable.as_str().into(),
+        running: entry.running,
+        level: session.map_or(-1, |session| percent(session.level)),
+        muted: session.is_some_and(|session| session.muted),
+    }
 }
 
 fn matches_query(entry: &AppEntry, query: &str) -> bool {
@@ -481,6 +554,21 @@ fn percent(value: f32) -> i32 {
     (value * 100.0).round() as i32
 }
 
+fn describe_outcome(binding: &HotkeyBinding, outcome: crate::audio::ApplyOutcome) -> String {
+    if outcome.affected == 0 {
+        return format!(
+            "{}: no matching audio session. Is the target app playing sound?",
+            binding.name
+        );
+    }
+    let noun = if outcome.affected == 1 { "app" } else { "apps" };
+    if outcome.restored {
+        format!("{} restored {} {noun}.", binding.name, outcome.affected)
+    } else {
+        format!("{} applied to {} {noun}.", binding.name, outcome.affected)
+    }
+}
+
 fn build_shortcut(text: &str, ctrl: bool, alt: bool, shift: bool, meta: bool) -> Option<String> {
     let token = key_token(text)?;
     let mut shortcut = String::new();
@@ -556,6 +644,7 @@ fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
     ModelRc::new(VecModel::from(items))
 }
 
+#[cfg(windows)]
 fn bind_hotkeys(ui: &AppWindow) {
     let weak = ui.as_weak();
     GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
@@ -566,17 +655,30 @@ fn bind_hotkeys(ui: &AppWindow) {
         let weak = weak.clone();
         let id = event.id;
         let _ = slint::invoke_from_event_loop(move || {
-            if let Err(error) = with_runtime(|runtime| runtime.handle_hotkey(id))
-                && let Some(ui) = weak.upgrade()
-            {
-                ui.set_status_error(true);
-                ui.set_status_text(error.to_string().into());
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            match with_runtime(|runtime| runtime.handle_hotkey(id)) {
+                Ok(message) if message.is_empty() => {}
+                Ok(message) => {
+                    let _ = refresh_ui(&ui);
+                    ui.set_status_error(false);
+                    ui.set_status_text(message.into());
+                }
+                Err(error) => {
+                    ui.set_status_error(true);
+                    ui.set_status_text(error.to_string().into());
+                }
             }
         });
     }));
 }
 
+#[cfg(windows)]
 fn create_tray(ui: &AppWindow) -> Result<tray_icon::TrayIcon> {
+    use tray_icon::TrayIconBuilder;
+    use tray_icon::menu::{Menu, MenuEvent, MenuItem};
+
     let open = MenuItem::with_id("open", "Open VOLE", true, None);
     let quit = MenuItem::with_id("quit", "Quit", true, None);
     let open_id = open.id().clone();
@@ -609,7 +711,8 @@ fn create_tray(ui: &AppWindow) -> Result<tray_icon::TrayIcon> {
     Ok(tray)
 }
 
-fn vole_icon() -> Result<Icon> {
+#[cfg(windows)]
+fn vole_icon() -> Result<tray_icon::Icon> {
     const SIZE: u32 = 32;
     let mut rgba = Vec::with_capacity((SIZE * SIZE * 4) as usize);
     for y in 0..SIZE {
@@ -624,5 +727,5 @@ fn vole_icon() -> Result<Icon> {
             });
         }
     }
-    Icon::from_rgba(rgba, SIZE, SIZE).context("failed to create VOLE icon")
+    tray_icon::Icon::from_rgba(rgba, SIZE, SIZE).context("failed to create VOLE icon")
 }

@@ -4,6 +4,8 @@ export struct ApplicationRow {
     display: string,
     executable: string,
     running: bool,
+    level: int,
+    muted: bool,
 }
 export struct HotkeyRow {
     name: string,
@@ -103,6 +105,7 @@ export component AppWindow inherits Window {
     callback select-hotkey(int);
     callback add-hotkey();
     callback remove-hotkey(int);
+    callback test-fire(int);
     callback update-hotkey(int, string, bool, bool);
     callback record-shortcut(string, bool, bool, bool, bool);
     callback select-action(int);
@@ -250,6 +253,23 @@ export component AppWindow inherits Window {
                                         font-size: 10px;
                                         overflow: elide;
                                     }
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                }
+                                if app.muted: Text {
+                                    y: parent.height / 2 - self.height / 2;
+                                    text: "muted";
+                                    color: #ff9eb0;
+                                    font-size: 11px;
+                                    font-family: "Consolas";
+                                }
+                                if !app.muted && app.level >= 0: Text {
+                                    y: parent.height / 2 - self.height / 2;
+                                    text: app.level + "%";
+                                    color: #7f8aa0;
+                                    font-size: 11px;
+                                    font-family: "Consolas";
                                 }
                             }
                             app-touch := TouchArea {
@@ -466,6 +486,12 @@ export component AppWindow inherits Window {
                             }
                             Rectangle {
                                 horizontal-stretch: 1;
+                            }
+                            Button {
+                                text: "Test fire";
+                                clicked => {
+                                    root.test-fire(root.selected-hotkey);
+                                }
                             }
                             Button {
                                 text: "Apply name";

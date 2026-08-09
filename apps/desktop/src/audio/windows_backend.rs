@@ -3,7 +3,6 @@
     reason = "Windows Core Audio and process APIs require FFI"
 )]
 
-use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -22,15 +21,14 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 use windows::core::{Interface, PWSTR};
 
-use crate::config::{HotkeyBinding, Operation, Target};
+use super::{AudioBackend, SessionInfo};
 
-pub struct AudioController {
+pub struct WindowsBackend {
     _com: ComApartment,
     devices: IMMDeviceEnumerator,
-    toggles: HashMap<String, HashMap<u32, SessionState>>,
 }
 
-impl AudioController {
+impl WindowsBackend {
     pub fn new() -> Result<Self> {
         let com = ComApartment::initialize()?;
         let devices = unsafe {
@@ -38,73 +36,10 @@ impl AudioController {
                 .context("failed to create Windows audio device enumerator")?
         };
 
-        Ok(Self {
-            _com: com,
-            devices,
-            toggles: HashMap::new(),
-        })
+        Ok(Self { _com: com, devices })
     }
 
-    pub fn apply(&mut self, binding: &HotkeyBinding) -> Result<()> {
-        let foreground_pid = foreground_pid();
-        let sessions = self.sessions()?;
-
-        if binding.toggle && self.restore_toggle(binding, &sessions)? {
-            return Ok(());
-        }
-
-        for action in &binding.actions {
-            for session in &sessions {
-                if session.matches(&action.target, foreground_pid) {
-                    session.apply(action.operation)?;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn restore_toggle(
-        &mut self,
-        binding: &HotkeyBinding,
-        sessions: &[AudioSession],
-    ) -> Result<bool> {
-        if let Some(snapshot) = self.toggles.remove(&binding.id) {
-            for session in sessions {
-                if let Some(state) = snapshot.get(&session.pid) {
-                    session.restore(*state)?;
-                }
-            }
-            return Ok(true);
-        }
-
-        let foreground_pid = foreground_pid();
-        let mut snapshot = HashMap::new();
-        for action in &binding.actions {
-            for session in sessions {
-                if session.matches(&action.target, foreground_pid)
-                    && !snapshot.contains_key(&session.pid)
-                {
-                    snapshot.insert(session.pid, session.capture()?);
-                }
-            }
-        }
-        self.toggles.insert(binding.id.clone(), snapshot);
-        Ok(false)
-    }
-
-    pub fn applications(&self) -> Result<Vec<String>> {
-        let mut executables = self
-            .sessions()?
-            .into_iter()
-            .filter_map(|session| session.executable)
-            .collect::<Vec<_>>();
-        executables.sort_unstable_by_key(|executable| executable.to_ascii_lowercase());
-        executables.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
-        Ok(executables)
-    }
-
-    fn sessions(&self) -> Result<Vec<AudioSession>> {
+    fn raw_sessions(&self) -> Result<Vec<RawSession>> {
         let device = unsafe {
             self.devices
                 .GetDefaultAudioEndpoint(eRender, eMultimedia)
@@ -137,7 +72,7 @@ impl AudioController {
             let volume: ISimpleAudioVolume = control
                 .cast()
                 .with_context(|| format!("failed to control audio session {index}"))?;
-            sessions.push(AudioSession {
+            sessions.push(RawSession {
                 pid,
                 executable: process_name(pid),
                 volume,
@@ -148,75 +83,58 @@ impl AudioController {
     }
 }
 
-struct AudioSession {
+impl AudioBackend for WindowsBackend {
+    fn sessions(&self) -> Result<Vec<SessionInfo>> {
+        let mut infos = Vec::new();
+        for session in self.raw_sessions()? {
+            let level = unsafe { session.volume.GetMasterVolume() }
+                .context("failed to read application volume")?;
+            let muted = unsafe { session.volume.GetMute() }
+                .context("failed to read application mute state")?
+                .as_bool();
+            infos.push(SessionInfo {
+                pid: session.pid,
+                executable: session.executable,
+                level,
+                muted,
+            });
+        }
+        Ok(infos)
+    }
+
+    fn set_level(&self, pid: u32, level: f32) -> Result<()> {
+        for session in self.raw_sessions()? {
+            if session.pid == pid {
+                unsafe {
+                    session
+                        .volume
+                        .SetMasterVolume(level.clamp(0.0, 1.0), std::ptr::null())
+                }
+                .context("failed to set application volume")?;
+            }
+        }
+        Ok(())
+    }
+
+    fn set_mute(&self, pid: u32, muted: bool) -> Result<()> {
+        for session in self.raw_sessions()? {
+            if session.pid == pid {
+                unsafe { session.volume.SetMute(muted, std::ptr::null()) }
+                    .context("failed to set application mute state")?;
+            }
+        }
+        Ok(())
+    }
+
+    fn foreground_pid(&self) -> Option<u32> {
+        foreground_pid()
+    }
+}
+
+struct RawSession {
     pid: u32,
     executable: Option<String>,
     volume: ISimpleAudioVolume,
-}
-
-impl AudioSession {
-    fn matches(&self, target: &Target, foreground_pid: Option<u32>) -> bool {
-        match target {
-            Target::Foreground => foreground_pid == Some(self.pid),
-            Target::Process { executable } => self
-                .executable
-                .as_deref()
-                .is_some_and(|name| name.eq_ignore_ascii_case(executable)),
-        }
-    }
-
-    fn apply(&self, operation: Operation) -> Result<()> {
-        match operation {
-            Operation::Set { level } => self.set_level(level),
-            Operation::Adjust { delta } => self.adjust(delta),
-            Operation::Mute { muted } => self.set_mute(muted),
-        }
-    }
-
-    fn capture(&self) -> Result<SessionState> {
-        Ok(SessionState {
-            level: self.level()?,
-            muted: self.muted()?,
-        })
-    }
-
-    fn restore(&self, state: SessionState) -> Result<()> {
-        self.set_level(state.level)?;
-        self.set_mute(state.muted)
-    }
-
-    fn level(&self) -> Result<f32> {
-        unsafe { self.volume.GetMasterVolume() }.context("failed to read application volume")
-    }
-
-    fn set_level(&self, level: f32) -> Result<()> {
-        unsafe {
-            self.volume
-                .SetMasterVolume(level.clamp(0.0, 1.0), std::ptr::null())
-        }
-        .context("failed to set application volume")
-    }
-
-    fn adjust(&self, delta: f32) -> Result<()> {
-        self.set_level(self.level()? + delta)
-    }
-
-    fn muted(&self) -> Result<bool> {
-        Ok(unsafe { self.volume.GetMute() }
-            .context("failed to read application mute state")?
-            .as_bool())
-    }
-
-    fn set_mute(&self, muted: bool) -> Result<()> {
-        unsafe { self.volume.SetMute(muted, std::ptr::null()) }
-            .context("failed to set application mute state")
-    }
-}
-
-#[derive(Clone, Copy)]
-struct SessionState {
-    level: f32,
-    muted: bool,
 }
 
 struct ComApartment;
