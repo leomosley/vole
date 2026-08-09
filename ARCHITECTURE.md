@@ -100,6 +100,15 @@ OS message loops or threads.
 - `tray-icon` provides the tray icon and context menu and likewise posts menu events to a channel.
 - Slint's winit backend owns the event loop and renders the config window when it is open.
 
+Windows delivers `WM_HOTKEY` only to the thread that owns the `GlobalHotKeyManager`'s hidden
+window, and that thread has to pump messages (`GetMessage`/`TranslateMessage`/`DispatchMessage`)
+continuously for presses to be handled. The Slint loop cannot do this: winit parks the main thread
+while the window is hidden to the tray, so presses were only handled when something else happened
+to wake it, which made global hotkeys fire at random after the window was closed. VOLE therefore
+owns the manager on a dedicated `hotkey_thread` that runs its own Win32 message loop. Registration
+is marshaled to that thread over a command channel and nudged awake with `PostThreadMessageW`; the
+thread is torn down with `WM_QUIT` on drop.
+
 Both `global-hotkey` and `tray-icon` expose a push handler stored in a process-wide `OnceCell`
 that locks to the first value it sees; a single event arriving before the handler is installed
 silently prevents it from ever being registered. To avoid that race, VOLE ignores the push handlers

@@ -9,8 +9,6 @@ use crate::config::{Action, Config, ConfigStore, HotkeyBinding, Operation, Targe
 use crate::{ActionRow, AppWindow, ApplicationRow, HotkeyRow};
 
 #[cfg(windows)]
-use global_hotkey::GlobalHotKeyManager;
-#[cfg(windows)]
 use global_hotkey::hotkey::HotKey;
 #[cfg(windows)]
 use std::collections::HashMap;
@@ -26,7 +24,7 @@ pub fn run() -> Result<()> {
     let store = ConfigStore::new()?;
     let config = reconcile_autostart(&store, store.load()?);
     let mut runtime = Runtime::new(store, config)?;
-    runtime.register_hotkeys()?;
+    runtime.apply_hotkeys()?;
     runtime.refresh_applications()?;
     RUNTIME.with(|slot| slot.replace(Some(runtime)));
 
@@ -64,7 +62,7 @@ struct Runtime {
     applications: Vec<AppEntry>,
     application_search: String,
     #[cfg(windows)]
-    hotkeys: GlobalHotKeyManager,
+    hotkeys: hotkey_thread::HotkeyThread,
     #[cfg(windows)]
     bindings: HashMap<u32, usize>,
 }
@@ -78,7 +76,7 @@ impl Runtime {
             applications: Vec::new(),
             application_search: String::new(),
             #[cfg(windows)]
-            hotkeys: GlobalHotKeyManager::new().context("failed to initialize global hotkeys")?,
+            hotkeys: hotkey_thread::HotkeyThread::spawn()?,
             #[cfg(windows)]
             bindings: HashMap::new(),
         })
@@ -93,19 +91,17 @@ impl Runtime {
     fn save_config(&mut self, config: Config) -> Result<()> {
         config.validate().context("invalid configuration")?;
 
-        self.unregister_hotkeys()?;
         let previous = std::mem::replace(&mut self.config, config);
-        if let Err(error) = self.register_hotkeys() {
+        if let Err(error) = self.apply_hotkeys() {
             self.config = previous;
-            self.register_hotkeys()
+            self.apply_hotkeys()
                 .context("failed to restore previous hotkeys")?;
             return Err(error);
         }
 
         if let Err(error) = self.store.save(&self.config) {
-            self.unregister_hotkeys()?;
             self.config = previous;
-            self.register_hotkeys()
+            self.apply_hotkeys()
                 .context("failed to restore previous hotkeys")?;
             return Err(error.into());
         }
@@ -199,58 +195,37 @@ impl Runtime {
         Ok(describe_outcome(&binding, outcome))
     }
 
+    // Rebuilds the live hotkey set from the current config. Registration runs
+    // on the dedicated hotkey thread; on success the id -> index map is adopted,
+    // on failure the thread has rolled back to nothing so the map is cleared.
     #[cfg(windows)]
-    fn register_hotkeys(&mut self) -> Result<()> {
-        let mut registered = Vec::new();
+    fn apply_hotkeys(&mut self) -> Result<()> {
+        let mut hotkeys = Vec::new();
+        let mut bindings = HashMap::new();
         for (index, binding) in self.config.hotkeys.iter().enumerate() {
             if !binding.enabled {
                 continue;
             }
             let hotkey = HotKey::from_str(&binding.shortcut)
                 .with_context(|| format!("invalid shortcut `{}`", binding.shortcut))?;
-            if let Err(error) = self.hotkeys.register(hotkey) {
-                if !registered.is_empty() {
-                    let _ = self.hotkeys.unregister_all(&registered);
-                }
-                self.bindings.clear();
-                return Err(error)
-                    .with_context(|| format!("shortcut `{}` is unavailable", binding.shortcut));
+            bindings.insert(hotkey.id(), index);
+            hotkeys.push((hotkey, binding.shortcut.clone()));
+        }
+
+        match self.hotkeys.apply(hotkeys) {
+            Ok(()) => {
+                self.bindings = bindings;
+                Ok(())
             }
-            registered.push(hotkey);
-            self.bindings.insert(hotkey.id(), index);
+            Err(error) => {
+                self.bindings.clear();
+                Err(error)
+            }
         }
-        Ok(())
-    }
-
-    #[cfg(windows)]
-    fn unregister_hotkeys(&mut self) -> Result<()> {
-        let hotkeys = self
-            .config
-            .hotkeys
-            .iter()
-            .filter(|binding| binding.enabled)
-            .map(|binding| {
-                HotKey::from_str(&binding.shortcut)
-                    .with_context(|| format!("invalid shortcut `{}`", binding.shortcut))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        if !hotkeys.is_empty() {
-            self.hotkeys
-                .unregister_all(&hotkeys)
-                .context("failed to unregister hotkeys")?;
-        }
-        self.bindings.clear();
-        Ok(())
     }
 
     #[cfg(not(windows))]
-    fn register_hotkeys(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    #[cfg(not(windows))]
-    fn unregister_hotkeys(&mut self) -> Result<()> {
+    fn apply_hotkeys(&mut self) -> Result<()> {
         Ok(())
     }
 
@@ -945,4 +920,167 @@ fn fit_square(source: &[u8], width: u32, height: u32, size: u32) -> Vec<u8> {
         }
     }
     out
+}
+
+// Owns the GlobalHotKeyManager on a dedicated thread that runs its own Win32
+// message loop. Windows delivers WM_HOTKEY to the thread that owns the
+// manager's hidden window, so that thread must pump messages continuously. The
+// UI thread cannot: winit parks it while the window is hidden to the tray, so
+// presses were only handled when something else happened to wake the loop,
+// which is why global hotkeys fired at random after the window was closed.
+// The Win32 message-loop calls below are the only unsafe in the crate; the
+// workspace otherwise denies unsafe_code.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod hotkey_thread {
+    use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
+    use std::thread::JoinHandle;
+
+    use anyhow::{Context, Result, anyhow};
+    use global_hotkey::GlobalHotKeyManager;
+    use global_hotkey::hotkey::HotKey;
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, TranslateMessage, WM_APP, WM_QUIT,
+    };
+
+    // A registration request marshaled to the hotkey thread. The reply channel
+    // carries the outcome back so callers observe errors synchronously.
+    enum Command {
+        Apply {
+            hotkeys: Vec<(HotKey, String)>,
+            reply: SyncSender<std::result::Result<(), String>>,
+        },
+    }
+
+    pub struct HotkeyThread {
+        thread_id: u32,
+        commands: Sender<Command>,
+        handle: Option<JoinHandle<()>>,
+    }
+
+    impl HotkeyThread {
+        pub fn spawn() -> Result<Self> {
+            let (commands_tx, commands_rx) = channel();
+            let (ready_tx, ready_rx) = sync_channel(0);
+            let handle = std::thread::Builder::new()
+                .name("vole-hotkeys".to_owned())
+                .spawn(move || pump(commands_rx, ready_tx))
+                .context("failed to spawn hotkey thread")?;
+
+            let thread_id = ready_rx
+                .recv()
+                .context("hotkey thread failed to start")?
+                .map_err(|error| anyhow!(error))
+                .context("failed to initialize global hotkeys")?;
+
+            Ok(Self {
+                thread_id,
+                commands: commands_tx,
+                handle: Some(handle),
+            })
+        }
+
+        // Swaps the live hotkey set, blocking until the thread reports the
+        // outcome. The error string already reads as a user-facing message.
+        pub fn apply(&self, hotkeys: Vec<(HotKey, String)>) -> Result<()> {
+            let (reply_tx, reply_rx) = sync_channel(0);
+            self.commands
+                .send(Command::Apply {
+                    hotkeys,
+                    reply: reply_tx,
+                })
+                .map_err(|_| anyhow!("hotkey thread is gone"))?;
+            self.wake();
+            reply_rx
+                .recv()
+                .map_err(|_| anyhow!("hotkey thread dropped the reply"))?
+                .map_err(|error| anyhow!(error))
+        }
+
+        // Nudges the message loop so a queued command is drained even when no
+        // other messages are arriving.
+        fn wake(&self) {
+            unsafe {
+                let _ = PostThreadMessageW(self.thread_id, WM_APP, WPARAM(0), LPARAM(0));
+            }
+        }
+    }
+
+    impl Drop for HotkeyThread {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0));
+            }
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    fn pump(commands: Receiver<Command>, ready: SyncSender<std::result::Result<u32, String>>) {
+        let manager = match GlobalHotKeyManager::new() {
+            Ok(manager) => manager,
+            Err(error) => {
+                let _ = ready.send(Err(error.to_string()));
+                return;
+            }
+        };
+        let thread_id = unsafe { GetCurrentThreadId() };
+        if ready.send(Ok(thread_id)).is_err() {
+            return;
+        }
+
+        let mut active: Vec<HotKey> = Vec::new();
+        let mut message = MSG::default();
+        loop {
+            // GetMessageW returns 0 on WM_QUIT and -1 on error; both end the loop.
+            let result = unsafe { GetMessageW(&mut message, None, 0, 0) };
+            if result.0 <= 0 {
+                break;
+            }
+            if message.message == WM_APP {
+                while let Ok(Command::Apply { hotkeys, reply }) = commands.try_recv() {
+                    let _ = reply.send(set_hotkeys(&manager, &mut active, hotkeys));
+                }
+                continue;
+            }
+            unsafe {
+                let _ = TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+
+        if !active.is_empty() {
+            let _ = manager.unregister_all(&active);
+        }
+    }
+
+    // Unregisters the current set, then registers the next one. On any failure
+    // the partially registered set is rolled back, leaving the manager holding
+    // nothing so it matches the empty `active` the caller then observes.
+    fn set_hotkeys(
+        manager: &GlobalHotKeyManager,
+        active: &mut Vec<HotKey>,
+        next: Vec<(HotKey, String)>,
+    ) -> std::result::Result<(), String> {
+        if !active.is_empty() {
+            let _ = manager.unregister_all(active);
+            active.clear();
+        }
+
+        let mut registered = Vec::new();
+        for (hotkey, shortcut) in next {
+            if let Err(error) = manager.register(hotkey) {
+                if !registered.is_empty() {
+                    let _ = manager.unregister_all(&registered);
+                }
+                return Err(format!("shortcut `{shortcut}` is unavailable ({error})"));
+            }
+            registered.push(hotkey);
+        }
+        *active = registered;
+        Ok(())
+    }
 }
