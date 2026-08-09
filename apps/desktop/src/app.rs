@@ -20,6 +20,18 @@ thread_local! {
 }
 
 pub fn run() -> Result<()> {
+    // Refuse to start a second instance: signal the running one to surface its
+    // window and exit. The guard holds the single-instance mutex for the rest
+    // of the process lifetime.
+    #[cfg(windows)]
+    let _singleton = match single_instance::acquire()? {
+        single_instance::Instance::Primary(guard) => guard,
+        single_instance::Instance::Secondary => {
+            single_instance::signal_show();
+            return Ok(());
+        }
+    };
+
     let ui = AppWindow::new().context("failed to create VOLE window")?;
     let store = ConfigStore::new()?;
     let config = reconcile_autostart(&store, store.load()?);
@@ -41,6 +53,21 @@ pub fn run() -> Result<()> {
     let (tray, open_id, quit_id) = create_tray(&ui)?;
     #[cfg(windows)]
     let _listeners = spawn_listeners(&ui, open_id, quit_id);
+
+    // A second launch signals this instance instead of starting a new process;
+    // restore the window so the Start-menu shortcut feels like it reopened VOLE.
+    #[cfg(windows)]
+    {
+        let weak = ui.as_weak();
+        single_instance::spawn_show_listener(move || {
+            let weak = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    let _ = ui.show();
+                }
+            });
+        })?;
+    }
 
     ui.window()
         .on_close_requested(|| slint::CloseRequestResponse::HideWindow);
@@ -1081,6 +1108,107 @@ mod hotkey_thread {
             registered.push(hotkey);
         }
         *active = registered;
+        Ok(())
+    }
+}
+
+// Guards against a second VOLE process. The app is manifested to require
+// administrator rights, so launching it again (e.g. from the Start menu) spawns
+// a fresh elevated process. Without this guard that process would try to
+// re-register the same global hotkeys, which RegisterHotKey rejects because the
+// combinations are already held system-wide, killing the running instance's
+// hotkeys. A second instance instead signals the first to restore its window
+// and exits.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod single_instance {
+    use anyhow::{Context, Result};
+    use windows::Win32::Foundation::{
+        CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, WAIT_OBJECT_0,
+    };
+    use windows::Win32::System::Threading::{
+        CreateEventW, CreateMutexW, INFINITE, SetEvent, WaitForSingleObject,
+    };
+    use windows::core::PCWSTR;
+
+    // Session-local names shared by every instance. Both processes run elevated
+    // in the same session, so the default namespace reaches across them.
+    const MUTEX_NAME: &str = "VOLE-single-instance-8f2c1a";
+    const EVENT_NAME: &str = "VOLE-show-window-8f2c1a";
+
+    pub enum Instance {
+        Primary(Guard),
+        Secondary,
+    }
+
+    // Holds the named mutex open for the process lifetime; dropping it releases
+    // the single-instance claim.
+    pub struct Guard {
+        mutex: HANDLE,
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = CloseHandle(self.mutex);
+            }
+        }
+    }
+
+    fn wide(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    pub fn acquire() -> Result<Instance> {
+        let name = wide(MUTEX_NAME);
+        let mutex = unsafe { CreateMutexW(None, false, PCWSTR(name.as_ptr())) }
+            .context("failed to create the single-instance mutex")?;
+        if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+            unsafe {
+                let _ = CloseHandle(mutex);
+            }
+            return Ok(Instance::Secondary);
+        }
+        Ok(Instance::Primary(Guard { mutex }))
+    }
+
+    // Wakes the primary instance so it can restore its window. Best-effort: if
+    // the signal fails the primary simply stays hidden, no worse than before.
+    pub fn signal_show() {
+        let name = wide(EVENT_NAME);
+        unsafe {
+            if let Ok(event) = CreateEventW(None, false, false, PCWSTR(name.as_ptr())) {
+                let _ = SetEvent(event);
+                let _ = CloseHandle(event);
+            }
+        }
+    }
+
+    // Runs on a dedicated thread in the primary. Each time a secondary signals,
+    // it calls `on_show` on the UI thread. The event auto-resets, so the wait
+    // re-arms itself for the next launch.
+    pub fn spawn_show_listener(on_show: impl Fn() + Send + 'static) -> Result<()> {
+        std::thread::Builder::new()
+            .name("vole-show".to_owned())
+            .spawn(move || {
+                let name = wide(EVENT_NAME);
+                let Ok(event) =
+                    (unsafe { CreateEventW(None, false, false, PCWSTR(name.as_ptr())) })
+                else {
+                    return;
+                };
+                loop {
+                    let wait = unsafe { WaitForSingleObject(event, INFINITE) };
+                    if wait.0 != WAIT_OBJECT_0.0 {
+                        break;
+                    }
+                    on_show();
+                }
+                unsafe {
+                    let _ = CloseHandle(event);
+                }
+            })
+            .context("failed to spawn the show-window listener")?;
         Ok(())
     }
 }

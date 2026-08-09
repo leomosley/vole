@@ -119,6 +119,17 @@ single-threaded; the listeners only block on a channel `recv`, so idle CPU stays
 A polling timer on the loop thread was tried first but stops firing once the window is hidden, which
 left global hotkeys and the tray menu dead after the window was closed.
 
+### Single instance
+
+VOLE is manifested to require administrator rights, so launching it again (from the Start menu, for
+example) spawns a fresh elevated process rather than reusing the running one. A second process would
+re-register the same global hotkeys, which `RegisterHotKey` rejects because the combinations are
+already held system-wide, leaving the running instance without working hotkeys. To prevent this, on
+startup VOLE claims a session-named mutex. The first instance holds it for its lifetime; any later
+instance sees it already exists, signals the first through a named auto-reset event, and exits. The
+first instance waits on that event from a dedicated thread and restores its window with
+`slint::invoke_from_event_loop`, so relaunching feels like reopening the existing window.
+
 ### Modules
 
 Single binary crate with internal modules:
