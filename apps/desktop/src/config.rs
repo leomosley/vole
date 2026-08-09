@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use thiserror::Error;
 
-pub const CONFIG_VERSION: u32 = 1;
+pub const CONFIG_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -59,6 +60,8 @@ pub struct HotkeyBinding {
     pub name: String,
     pub shortcut: String,
     pub enabled: bool,
+    #[serde(default)]
+    pub toggle: bool,
     pub actions: Vec<Action>,
 }
 
@@ -116,14 +119,13 @@ pub enum Target {
 pub enum Operation {
     Set { level: f32 },
     Adjust { delta: f32 },
-    ToggleMute,
-    ToggleDuck { level: f32 },
+    Mute { muted: bool },
 }
 
 impl Operation {
     fn validate(self, binding_id: &str) -> Result<(), ValidationError> {
         match self {
-            Self::Set { level } | Self::ToggleDuck { level } if !(0.0..=1.0).contains(&level) => {
+            Self::Set { level } if !(0.0..=1.0).contains(&level) => {
                 Err(ValidationError::InvalidLevel(binding_id.to_owned()))
             }
             Self::Adjust { delta } if !(-1.0..=1.0).contains(&delta) || delta == 0.0 => {
@@ -131,6 +133,68 @@ impl Operation {
             }
             _ => Ok(()),
         }
+    }
+}
+
+fn migrate(value: &mut Value) {
+    let version = value.get("version").and_then(Value::as_u64).unwrap_or(0);
+    if version < 2 {
+        migrate_v1_to_v2(value);
+    }
+}
+
+fn migrate_v1_to_v2(value: &mut Value) {
+    let Some(root) = value.as_object_mut() else {
+        return;
+    };
+    root.insert("version".to_owned(), Value::from(2));
+
+    let Some(hotkeys) = root.get_mut("hotkeys").and_then(Value::as_array_mut) else {
+        return;
+    };
+
+    for hotkey in hotkeys {
+        let Some(binding) = hotkey.as_object_mut() else {
+            continue;
+        };
+        let mut toggle = binding
+            .get("toggle")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+
+        if let Some(actions) = binding.get_mut("actions").and_then(Value::as_array_mut) {
+            for action in actions {
+                toggle |= migrate_operation_v1_to_v2(action);
+            }
+        }
+
+        binding.insert("toggle".to_owned(), Value::from(toggle));
+    }
+}
+
+fn migrate_operation_v1_to_v2(action: &mut Value) -> bool {
+    let Some(operation) = action.get_mut("operation").and_then(Value::as_object_mut) else {
+        return false;
+    };
+
+    match operation.get("type").and_then(Value::as_str) {
+        Some("toggle_mute") => {
+            operation.clear();
+            operation.insert("type".to_owned(), Value::from("mute"));
+            operation.insert("muted".to_owned(), Value::from(true));
+            true
+        }
+        Some("toggle_duck") => {
+            let level = operation
+                .get("level")
+                .cloned()
+                .unwrap_or_else(|| Value::from(0.2));
+            operation.clear();
+            operation.insert("type".to_owned(), Value::from("set"));
+            operation.insert("level".to_owned(), level);
+            true
+        }
+        _ => false,
     }
 }
 
@@ -212,11 +276,26 @@ impl ConfigStore {
             }
         };
 
-        let config: Config = serde_json::from_str(&text).map_err(|source| ConfigError::Parse {
-            path: self.path.clone(),
-            source,
-        })?;
+        let mut value: Value =
+            serde_json::from_str(&text).map_err(|source| ConfigError::Parse {
+                path: self.path.clone(),
+                source,
+            })?;
+
+        let source_version = value.get("version").and_then(Value::as_u64).unwrap_or(0);
+        migrate(&mut value);
+
+        let config: Config =
+            serde_json::from_value(value).map_err(|source| ConfigError::Parse {
+                path: self.path.clone(),
+                source,
+            })?;
         config.validate()?;
+
+        if source_version < u64::from(CONFIG_VERSION) {
+            let _ = self.save(&config);
+        }
+
         Ok(config)
     }
 
@@ -254,9 +333,10 @@ mod tests {
             name: "Hear Discord".to_owned(),
             shortcut: "Ctrl+Alt+D".to_owned(),
             enabled: true,
+            toggle: true,
             actions: vec![Action {
                 target: Target::Foreground,
-                operation: Operation::ToggleDuck { level: 0.2 },
+                operation: Operation::Mute { muted: true },
             }],
         }
     }
@@ -329,5 +409,40 @@ mod tests {
         let _ = fs::remove_file(path);
 
         assert_eq!(loaded, config);
+    }
+
+    #[test]
+    fn load_should_migrate_v1_toggle_operations() {
+        let path = temporary_config_path();
+        let store = ConfigStore::at(path.clone());
+        let legacy = r#"{
+            "version": 1,
+            "launch_on_startup": false,
+            "hotkeys": [
+                {
+                    "id": "duck-game",
+                    "name": "Duck game",
+                    "shortcut": "Ctrl+Alt+D",
+                    "enabled": true,
+                    "actions": [
+                        { "target": { "type": "foreground" }, "operation": { "type": "toggle_duck", "level": 0.2 } },
+                        { "target": { "type": "process", "executable": "chrome.exe" }, "operation": { "type": "toggle_mute" } }
+                    ]
+                }
+            ]
+        }"#;
+        fs::write(&path, legacy).expect("legacy config should write");
+
+        let loaded = store.load().expect("legacy config should migrate");
+        let _ = fs::remove_file(path);
+
+        let binding = &loaded.hotkeys[0];
+        assert_eq!(loaded.version, CONFIG_VERSION);
+        assert!(binding.toggle);
+        assert_eq!(binding.actions[0].operation, Operation::Set { level: 0.2 });
+        assert_eq!(
+            binding.actions[1].operation,
+            Operation::Mute { muted: true }
+        );
     }
 }
