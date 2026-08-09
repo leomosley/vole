@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.turbo/
+.astro/
+target/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS and editors
+.DS_Store
+Thumbs.db
+.idea/
