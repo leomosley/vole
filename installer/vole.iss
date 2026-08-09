@@ -22,6 +22,7 @@ SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\vole.exe
 CloseApplications=yes
+CloseApplicationsFilter=vole.exe
 RestartApplications=no
 UsePreviousAppDir=yes
 UsePreviousGroup=yes
@@ -42,3 +43,30 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\vole.exe"; Description: "Launch VOLE"; Flags: nowait postinstall skipifsilent
+
+[Code]
+procedure StopRunningVole;
+var
+  Attempt: Integer;
+  ResultCode: Integer;
+begin
+  for Attempt := 1 to 3 do
+  begin
+    Log(Format('Stopping running VOLE process (attempt %d)', [Attempt]));
+    Exec(
+      ExpandConstant('{sys}\taskkill.exe'),
+      '/F /T /IM vole.exe',
+      '',
+      SW_HIDE,
+      ewWaitUntilTerminated,
+      ResultCode
+    );
+    Sleep(500);
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  StopRunningVole;
+  Result := '';
+end;
