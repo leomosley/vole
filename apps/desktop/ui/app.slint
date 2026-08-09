@@ -319,6 +319,14 @@ export component AppWindow inherits Window {
                             background: binding-touch.has-hover ? #202633 : #161b25;
                             border-width: index == root.selected-hotkey ? 1px : 0;
                             border-color: #a779ff;
+                            // Declared first so it sits behind the delete button:
+                            // the later delete TouchArea then wins clicks on the ✕
+                            // while this one handles the rest of the row.
+                            binding-touch := TouchArea {
+                                clicked => {
+                                    root.select-hotkey(index);
+                                }
+                            }
                             HorizontalLayout {
                                 padding: 10px;
                                 spacing: 6px;
@@ -375,11 +383,6 @@ export component AppWindow inherits Window {
                                             root.remove-hotkey(index);
                                         }
                                     }
-                                }
-                            }
-                            binding-touch := TouchArea {
-                                clicked => {
-                                    root.select-hotkey(index);
                                 }
                             }
                         }
