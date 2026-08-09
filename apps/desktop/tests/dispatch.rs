@@ -109,6 +109,7 @@ fn disabled_shortcut_still_dispatches_when_fired_directly() {
         shortcut: "Ctrl+Alt+X".to_owned(),
         enabled: false,
         toggle: false,
+        custom_name: false,
         actions: vec![vole::config::Action {
             target: vole::config::Target::Process {
                 executable: "chrome.exe".to_owned(),
@@ -135,6 +136,7 @@ fn firing_a_hotkey_with_no_matching_session_reports_zero() {
         shortcut: "Ctrl+Alt+Y".to_owned(),
         enabled: true,
         toggle: false,
+        custom_name: false,
         actions: vec![vole::config::Action {
             target: vole::config::Target::Process {
                 executable: "discord.exe".to_owned(),

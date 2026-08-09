@@ -62,6 +62,9 @@ pub struct HotkeyBinding {
     pub enabled: bool,
     #[serde(default)]
     pub toggle: bool,
+    // True once the user renames the hotkey; keeps auto-naming from clobbering it.
+    #[serde(default)]
+    pub custom_name: bool,
     pub actions: Vec<Action>,
 }
 
@@ -334,6 +337,7 @@ mod tests {
             shortcut: "Ctrl+Alt+D".to_owned(),
             enabled: true,
             toggle: true,
+            custom_name: false,
             actions: vec![Action {
                 target: Target::Foreground,
                 operation: Operation::Mute { muted: true },

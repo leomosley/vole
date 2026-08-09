@@ -212,6 +212,7 @@ mod tests {
             shortcut: "Ctrl+Alt+D".to_owned(),
             enabled: true,
             toggle,
+            custom_name: false,
             actions,
         }
     }

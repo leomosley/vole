@@ -270,6 +270,7 @@ stays honest.
   target-only dependency (`[target.'cfg(windows)'.dependencies]`).
 - `global-hotkey` — global hotkeys; `RegisterHotKey`-based on Windows, anti-cheat-safe. Target-only.
 - `tray-icon` — tray icon and context menu. Target-only.
+- `png` — decodes the bundled `assets/vole.png` mascot into RGBA for the tray icon. Target-only.
 - `slint` (winit backend) — the animated config window. A normal dependency so the GUI builds and
   runs on Linux too.
 - `serde` + `serde_json` — config load/save.

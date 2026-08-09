@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 use anyhow::{Context, Result};
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::audio::{AudioEngine, PlatformBackend, SessionInfo};
 use crate::catalog::{self, AppEntry};
@@ -117,6 +117,73 @@ impl Runtime {
         let mut config = self.config.clone();
         mutation(&mut config);
         self.save_config(config)
+    }
+
+    // Mutates the config, then regenerates the auto-name of the affected hotkey
+    // unless the user has given it a custom name. Used by every action edit so
+    // the name tracks the apps and operations it targets.
+    fn mutate_and_autoname(
+        &mut self,
+        index: i32,
+        mutation: impl FnOnce(&mut Config),
+    ) -> Result<()> {
+        let applications = self.applications.clone();
+        self.mutate_config(move |config| {
+            mutation(config);
+            if index < 0 {
+                return;
+            }
+            if let Some(binding) = config.hotkeys.get_mut(index as usize)
+                && !binding.custom_name
+            {
+                binding.name = auto_name(binding, &applications);
+            }
+        })
+    }
+
+    // Persists a name edit directly. A blank name reverts to auto-naming; any
+    // other value marks the hotkey as user-named. This skips hotkey
+    // re-registration since names never affect shortcuts.
+    fn rename_hotkey(&mut self, index: i32, text: &str) -> Result<()> {
+        if index < 0 {
+            return Ok(());
+        }
+        let idx = index as usize;
+        let trimmed = text.trim();
+        let auto = if trimmed.is_empty() {
+            self.config
+                .hotkeys
+                .get(idx)
+                .map(|binding| auto_name(binding, &self.applications))
+        } else {
+            None
+        };
+
+        if let Some(binding) = self.config.hotkeys.get_mut(idx) {
+            match auto {
+                Some(name) => {
+                    binding.custom_name = false;
+                    binding.name = name;
+                }
+                None => {
+                    binding.custom_name = true;
+                    binding.name = trimmed.to_owned();
+                }
+            }
+        }
+
+        self.store.save(&self.config)?;
+        Ok(())
+    }
+
+    // Applies the OS autostart change first, then persists the choice. Autostart
+    // does not touch hotkeys, so this skips the hotkey re-registration that
+    // save_config performs and just writes the updated config to disk.
+    fn set_launch_on_startup(&mut self, enabled: bool) -> Result<()> {
+        crate::autostart::set(enabled).context("failed to update autostart")?;
+        self.config.launch_on_startup = enabled;
+        self.store.save(&self.config)?;
+        Ok(())
     }
 
     // Runs a binding's actions through the audio engine. This is the single
@@ -242,6 +309,18 @@ fn bind_ui(ui: &AppWindow) {
     });
 
     let weak = ui.as_weak();
+    ui.on_set_launch_on_startup(move |enabled| {
+        let message = if enabled {
+            "Launch on startup enabled."
+        } else {
+            "Launch on startup disabled."
+        };
+        run_ui_action(&weak, message, move |runtime| {
+            runtime.set_launch_on_startup(enabled)
+        });
+    });
+
+    let weak = ui.as_weak();
     ui.on_select_hotkey(move |index| {
         if let Some(ui) = weak.upgrade() {
             select_hotkey(&ui, index);
@@ -252,14 +331,16 @@ fn bind_ui(ui: &AppWindow) {
     ui.on_add_hotkey(move || {
         run_ui_action(&weak, "Hotkey created.", |runtime| {
             let sequence = runtime.config.hotkeys.len() + 1;
+            let index = runtime.config.hotkeys.len() as i32;
             let shortcut = next_shortcut(&runtime.config);
-            runtime.mutate_config(|config| {
+            runtime.mutate_and_autoname(index, |config| {
                 config.hotkeys.push(HotkeyBinding {
                     id: format!("hotkey-{sequence}"),
-                    name: format!("Hotkey {sequence}"),
+                    name: String::new(),
                     shortcut,
                     enabled: true,
-                    toggle: false,
+                    toggle: true,
+                    custom_name: false,
                     actions: vec![Action {
                         target: Target::Foreground,
                         operation: Operation::Set { level: 0.5 },
@@ -273,7 +354,6 @@ fn bind_ui(ui: &AppWindow) {
     ui.on_remove_hotkey(move |index| {
         if let Some(ui) = weak.upgrade() {
             ui.set_selected_hotkey(-1);
-            ui.set_selected_action(-1);
         }
         run_ui_action(&weak, "Hotkey removed.", |runtime| {
             runtime.mutate_config(|config| {
@@ -304,16 +384,36 @@ fn bind_ui(ui: &AppWindow) {
     });
 
     let weak = ui.as_weak();
-    ui.on_update_hotkey(move |index, name, enabled, toggle| {
+    ui.on_update_hotkey(move |index, enabled, toggle| {
         run_ui_action(&weak, "Hotkey updated.", |runtime| {
             runtime.mutate_config(|config| {
                 if let Some(binding) = config.hotkeys.get_mut(index as usize) {
-                    binding.name = name.to_string();
                     binding.enabled = enabled;
                     binding.toggle = toggle;
                 }
             })
         });
+    });
+
+    // The name field commits on every keystroke. It persists directly without
+    // re-registering hotkeys, and refreshes only the rail so the text field
+    // keeps its cursor while the user types.
+    let weak = ui.as_weak();
+    ui.on_rename_hotkey(move |index, name| {
+        let result = with_runtime(|runtime| runtime.rename_hotkey(index, name.as_str()));
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
+        match result {
+            Ok(()) => {
+                ui.set_status_error(false);
+                let _ = refresh_hotkey_list(&ui);
+            }
+            Err(error) => {
+                ui.set_status_error(true);
+                ui.set_status_text(error.to_string().into());
+            }
+        }
     });
 
     let weak = ui.as_weak();
@@ -336,17 +436,10 @@ fn bind_ui(ui: &AppWindow) {
     });
 
     let weak = ui.as_weak();
-    ui.on_select_action(move |index| {
-        if let Some(ui) = weak.upgrade() {
-            select_action(&ui, index);
-        }
-    });
-
-    let weak = ui.as_weak();
     ui.on_add_action(move |executable| {
         let hotkey_index = weak.upgrade().map_or(-1, |ui| ui.get_selected_hotkey());
         run_ui_action(&weak, "Action added.", |runtime| {
-            runtime.mutate_config(|config| {
+            runtime.mutate_and_autoname(hotkey_index, |config| {
                 if let Some(binding) = config.hotkeys.get_mut(hotkey_index as usize) {
                     let target = if executable.is_empty() {
                         Target::Foreground
@@ -366,11 +459,8 @@ fn bind_ui(ui: &AppWindow) {
 
     let weak = ui.as_weak();
     ui.on_remove_action(move |hotkey_index, action_index| {
-        if let Some(ui) = weak.upgrade() {
-            ui.set_selected_action(-1);
-        }
         run_ui_action(&weak, "Action removed.", |runtime| {
-            runtime.mutate_config(|config| {
+            runtime.mutate_and_autoname(hotkey_index, |config| {
                 if let Some(binding) = config.hotkeys.get_mut(hotkey_index as usize)
                     && action_index >= 0
                     && (action_index as usize) < binding.actions.len()
@@ -385,7 +475,7 @@ fn bind_ui(ui: &AppWindow) {
     ui.on_update_action(
         move |hotkey_index, action_index, target, operation, value, muted| {
             run_ui_action(&weak, "Action updated.", |runtime| {
-                runtime.mutate_config(|config| {
+                runtime.mutate_and_autoname(hotkey_index, |config| {
                     let Some(action) = config
                         .hotkeys
                         .get_mut(hotkey_index as usize)
@@ -446,31 +536,101 @@ fn refresh_ui(ui: &AppWindow) -> Result<()> {
             .filter(|entry| matches_query(entry, &query))
             .map(|entry| application_row(entry, &live))
             .collect();
-        let hotkeys = runtime
-            .config
-            .hotkeys
-            .iter()
-            .map(|binding| HotkeyRow {
-                name: binding.name.as_str().into(),
-                shortcut: binding.shortcut.as_str().into(),
-                action_count: binding.actions.len() as i32,
-                enabled: binding.enabled,
-                toggle: binding.toggle,
-            })
-            .collect();
         ui.set_applications(model(applications));
-        ui.set_hotkeys(model(hotkeys));
+        ui.set_hotkeys(model(hotkey_rows(runtime)));
+        ui.set_launch_on_startup(runtime.config.launch_on_startup);
 
         let selected = ui.get_selected_hotkey();
         if selected < 0 || selected as usize >= runtime.config.hotkeys.len() {
             ui.set_selected_hotkey(-1);
-            ui.set_selected_action(-1);
             ui.set_actions(model(Vec::new()));
         } else {
             populate_hotkey(ui, &runtime.config.hotkeys[selected as usize]);
         }
         Ok(())
     })
+}
+
+fn hotkey_rows(runtime: &Runtime) -> Vec<HotkeyRow> {
+    runtime
+        .config
+        .hotkeys
+        .iter()
+        .map(|binding| HotkeyRow {
+            name: binding.name.as_str().into(),
+            shortcut: binding.shortcut.as_str().into(),
+            action_count: binding.actions.len() as i32,
+            enabled: binding.enabled,
+            toggle: binding.toggle,
+        })
+        .collect()
+}
+
+// Rebuilds only the hotkey rail. Used after a rename so the list reflects the
+// new name without repopulating the editor (which would reset the name field's
+// cursor while the user is typing).
+fn refresh_hotkey_list(ui: &AppWindow) -> Result<()> {
+    with_runtime(|runtime| {
+        ui.set_hotkeys(model(hotkey_rows(runtime)));
+        Ok(())
+    })
+}
+
+// Builds a readable name from a hotkey's actions, e.g. "Mute Discord, Set
+// Spotify". Falls back to a count when there are many actions.
+fn auto_name(binding: &HotkeyBinding, applications: &[AppEntry]) -> String {
+    if binding.actions.is_empty() {
+        return "Untitled".to_owned();
+    }
+
+    let parts: Vec<String> = binding
+        .actions
+        .iter()
+        .map(|action| {
+            format!(
+                "{} {}",
+                operation_verb(action.operation),
+                nice_target(&action.target, applications)
+            )
+        })
+        .collect();
+
+    let name = parts.join(", ");
+    if name.chars().count() > 42 {
+        return format!("{} actions", binding.actions.len());
+    }
+
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => name,
+    }
+}
+
+fn operation_verb(operation: Operation) -> &'static str {
+    match operation {
+        Operation::Set { .. } => "set",
+        Operation::Adjust { .. } => "adjust",
+        Operation::Mute { muted: true } => "mute",
+        Operation::Mute { muted: false } => "unmute",
+    }
+}
+
+fn nice_target(target: &Target, applications: &[AppEntry]) -> String {
+    match target {
+        Target::Foreground => "focused app".to_owned(),
+        Target::Process { executable } => applications
+            .iter()
+            .find(|entry| entry.executable.eq_ignore_ascii_case(executable))
+            .map(|entry| entry.display.clone())
+            .unwrap_or_else(|| {
+                executable
+                    .strip_suffix(".exe")
+                    .or_else(|| executable.strip_suffix(".EXE"))
+                    .unwrap_or(executable)
+                    .to_owned()
+            }),
+    }
 }
 
 fn application_row(entry: &AppEntry, live: &[SessionInfo]) -> ApplicationRow {
@@ -497,7 +657,6 @@ fn matches_query(entry: &AppEntry, query: &str) -> bool {
 
 fn select_hotkey(ui: &AppWindow, index: i32) {
     ui.set_selected_hotkey(index);
-    ui.set_selected_action(-1);
     let _ = refresh_ui(ui);
 }
 
@@ -510,48 +669,23 @@ fn populate_hotkey(ui: &AppWindow, binding: &HotkeyBinding) {
         binding
             .actions
             .iter()
-            .map(|action| ActionRow {
-                target: target_name(&action.target).into(),
-                operation: operation_name(action.operation),
+            .map(|action| {
+                let (operation, value) = operation_values(action.operation);
+                ActionRow {
+                    target: target_name(&action.target).into(),
+                    operation,
+                    value,
+                    muted: matches!(action.operation, Operation::Mute { muted: true }),
+                }
             })
             .collect(),
     ));
-}
-
-fn select_action(ui: &AppWindow, index: i32) {
-    ui.set_selected_action(index);
-    let hotkey = ui.get_selected_hotkey();
-    let _ = with_runtime(|runtime| {
-        let Some(action) = runtime
-            .config
-            .hotkeys
-            .get(hotkey as usize)
-            .and_then(|binding| binding.actions.get(index as usize))
-        else {
-            return Ok(());
-        };
-        ui.set_selected_target(target_name(&action.target).into());
-        let (operation, value) = operation_values(action.operation);
-        ui.set_selected_operation(operation);
-        ui.set_selected_value(value);
-        ui.set_selected_muted(matches!(action.operation, Operation::Mute { muted: true }));
-        Ok(())
-    });
 }
 
 fn target_name(target: &Target) -> &str {
     match target {
         Target::Foreground => "Focused application",
         Target::Process { executable } => executable,
-    }
-}
-
-fn operation_name(operation: Operation) -> SharedString {
-    match operation {
-        Operation::Set { level } => format!("Set level to {}%", percent(level)).into(),
-        Operation::Adjust { delta } => format!("Adjust level by {}%", percent(delta)).into(),
-        Operation::Mute { muted: true } => "Mute".into(),
-        Operation::Mute { muted: false } => "Unmute".into(),
     }
 }
 
@@ -563,8 +697,8 @@ fn operation_values(operation: Operation) -> (i32, i32) {
     }
 }
 
-fn operation_from_ui(operation: i32, value: i32, muted: bool) -> Operation {
-    let level = value as f32 / 100.0;
+fn operation_from_ui(operation: i32, value: f32, muted: bool) -> Operation {
+    let level = value / 100.0;
     match operation {
         1 => Operation::Adjust { delta: level },
         2 => Operation::Mute { muted },
@@ -751,19 +885,56 @@ fn create_tray(
 
 #[cfg(windows)]
 fn vole_icon() -> Result<tray_icon::Icon> {
+    // The bundled vole artwork, decoded and fitted (aspect-preserved) into a
+    // square RGBA buffer so the tray shows the real mascot instead of a glyph.
     const SIZE: u32 = 32;
-    let mut rgba = Vec::with_capacity((SIZE * SIZE * 4) as usize);
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let v = (6..12).contains(&x) && (6..20).contains(&y)
-                || (21..27).contains(&x) && (6..20).contains(&y)
-                || (18..25).contains(&y) && (9..24).contains(&x);
-            rgba.extend_from_slice(if v {
-                &[16, 13, 24, 255]
-            } else {
-                &[157, 108, 255, 255]
-            });
+    const PNG: &[u8] = include_bytes!("../../../assets/vole.png");
+
+    let (source, width, height) = decode_png_rgba(PNG)?;
+    let rgba = fit_square(&source, width, height, SIZE);
+    tray_icon::Icon::from_rgba(rgba, SIZE, SIZE).context("failed to create VOLE icon")
+}
+
+#[cfg(windows)]
+fn decode_png_rgba(bytes: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
+    let decoder = png::Decoder::new(bytes);
+    let mut reader = decoder.read_info().context("failed to read VOLE icon header")?;
+    let mut buffer = vec![0; reader.output_buffer_size()];
+    let info = reader
+        .next_frame(&mut buffer)
+        .context("failed to decode VOLE icon")?;
+    buffer.truncate(info.buffer_size());
+
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => buffer,
+        png::ColorType::Rgb => buffer
+            .chunks_exact(3)
+            .flat_map(|pixel| [pixel[0], pixel[1], pixel[2], 255])
+            .collect(),
+        other => anyhow::bail!("unsupported VOLE icon color type {other:?}"),
+    };
+    Ok((rgba, info.width, info.height))
+}
+
+// Nearest-neighbour scale of an RGBA image into a transparent SIZE x SIZE
+// square, preserving aspect ratio so the portrait artwork is not stretched.
+#[cfg(windows)]
+fn fit_square(source: &[u8], width: u32, height: u32, size: u32) -> Vec<u8> {
+    let scale = (size as f32 / width as f32).min(size as f32 / height as f32);
+    let draw_w = ((width as f32 * scale).round() as u32).max(1);
+    let draw_h = ((height as f32 * scale).round() as u32).max(1);
+    let offset_x = (size - draw_w) / 2;
+    let offset_y = (size - draw_h) / 2;
+
+    let mut out = vec![0u8; (size * size * 4) as usize];
+    for y in 0..draw_h {
+        let src_y = (y * height / draw_h).min(height - 1);
+        for x in 0..draw_w {
+            let src_x = (x * width / draw_w).min(width - 1);
+            let src = ((src_y * width + src_x) * 4) as usize;
+            let dst = (((y + offset_y) * size + (x + offset_x)) * 4) as usize;
+            out[dst..dst + 4].copy_from_slice(&source[src..src + 4]);
         }
     }
-    tray_icon::Icon::from_rgba(rgba, SIZE, SIZE).context("failed to create VOLE icon")
+    out
 }
