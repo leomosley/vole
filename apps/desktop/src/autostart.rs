@@ -18,6 +18,14 @@ pub fn is_enabled() -> bool {
     imp::is_enabled()
 }
 
+// Older installs registered autostart under HKCU\...\Run. Now that VOLE requires
+// elevation, Windows cannot launch that entry (CreateProcess will not elevate),
+// so it fails at every logon. Remove it best-effort; the scheduled task has
+// replaced it. Runs as the logged-in user, so HKCU is the correct hive.
+pub fn remove_legacy_run_entry() {
+    imp::remove_legacy_run_entry();
+}
+
 #[cfg(windows)]
 mod imp {
     use std::os::windows::process::CommandExt;
@@ -82,6 +90,22 @@ mod imp {
             .status()
             .is_ok_and(|status| status.success())
     }
+
+    pub fn remove_legacy_run_entry() {
+        let mut command = Command::new("reg.exe");
+        command.creation_flags(CREATE_NO_WINDOW);
+        let _ = command
+            .args([
+                "delete",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                "VOLE",
+                "/f",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
 }
 
 #[cfg(not(windows))]
@@ -100,4 +124,6 @@ mod imp {
     pub fn is_enabled() -> bool {
         false
     }
+
+    pub fn remove_legacy_run_entry() {}
 }

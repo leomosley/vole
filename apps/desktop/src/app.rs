@@ -201,6 +201,8 @@ impl Runtime {
 // added or removed outside the app.
 #[cfg(windows)]
 fn reconcile_autostart(store: &ConfigStore, mut config: Config) -> Config {
+    crate::autostart::remove_legacy_run_entry();
+
     let enabled = crate::autostart::is_enabled();
     if config.launch_on_startup != enabled {
         config.launch_on_startup = enabled;
