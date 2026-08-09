@@ -9,10 +9,10 @@ AppVersion={#AppVersion}
 AppPublisher=VOLE
 AppPublisherURL=https://github.com/leomosley/vole
 AppSupportURL=https://github.com/leomosley/vole/issues
-DefaultDirName={localappdata}\Programs\VOLE
+DefaultDirName={autopf}\VOLE
 DefaultGroupName=VOLE
 DisableProgramGroupPage=yes
-PrivilegesRequired=lowest
+PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..\dist
@@ -38,11 +38,16 @@ Source: "..\target\release\vole.exe"; DestDir: "{app}"; Flags: ignoreversion res
 Name: "{group}\VOLE"; Filename: "{app}\vole.exe"
 Name: "{group}\Uninstall VOLE"; Filename: "{uninstallexe}"
 
-[Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "VOLE"; ValueData: """{app}\vole.exe"""; Tasks: startup; Flags: uninsdeletevalue
-
+; VOLE requires administrator rights, so autostart runs through a logon
+; scheduled task registered with the highest privileges instead of a Run key.
+; A Run key would raise a UAC prompt at every logon. The elevated app manages
+; the task through its own CLI, keeping the schtasks details in one place.
 [Run]
+Filename: "{app}\vole.exe"; Parameters: "--enable-autostart"; Tasks: startup; Flags: runhidden waituntilterminated
 Filename: "{app}\vole.exe"; Description: "Launch VOLE"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+Filename: "{app}\vole.exe"; Parameters: "--disable-autostart"; Flags: runhidden waituntilterminated; RunOnceId: "DisableAutostart"
 
 [Code]
 procedure StopRunningVole;

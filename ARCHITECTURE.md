@@ -134,7 +134,7 @@ Single binary crate with internal modules:
 - `app` — orchestrator. Owns the in-memory config and an `AudioEngine<PlatformBackend>`, and
   exposes a single cross-platform `fire(index)` dispatch path shared by real hotkeys and the UI's
   Test-fire button.
-- `autostart` — toggles the `HKCU\...\Run` registry key.
+- `autostart` — toggles a logon-triggered scheduled task registered with the highest privileges.
 
 ### Audio targeting
 
@@ -238,12 +238,29 @@ handlers with no further branching. Older `version: 1` files are migrated in pla
 }
 ```
 
+### Elevation
+
+VOLE embeds a Windows application manifest (`build.rs`, via `embed-manifest`) requesting
+`requireAdministrator`, so it always runs at high integrity. This is required for hotkeys: Windows'
+User Interface Privilege Isolation suppresses `WM_HOTKEY` delivery to a lower-integrity process
+while an elevated window holds the foreground, which is exactly the case for anti-cheat protected
+games (e.g. Rainbow Six Siege under BattlEye). Running elevated keeps `RegisterHotKey` — still the
+anti-cheat-safe mechanism — working even when such a game is focused.
+
+Because the app requires elevation, the installer installs to Program Files (`{autopf}\VOLE`) under
+an admin-elevated setup, rather than a user-writable directory. An elevated executable living in a
+user-writable location would be a privilege-escalation risk.
+
 ### Autostart
 
-An in-app "Launch on startup" toggle writes or removes the
-`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value. Because the app can register its own
-autostart, it is fully functional even when run as a portable binary, and the installer's startup
-option simply sets the same key.
+Autostart runs VOLE through a logon-triggered scheduled task registered with the highest privileges
+(`schtasks /Create /SC ONLOGON /RL HIGHEST`), not an `HKCU\...\Run` value. A Run entry would raise a
+UAC prompt at every logon now that the app requires administrator rights; the scheduled task
+launches elevated silently instead. The `autostart` module owns the `schtasks` calls, and the app
+exposes `--enable-autostart` / `--disable-autostart` CLI flags that the elevated installer invokes
+to add the task (when the startup option is checked) or the uninstaller invokes to remove it. On
+launch the app mirrors the task's presence back into `config.launch_on_startup` so the stored flag
+stays honest.
 
 ---
 
@@ -256,6 +273,8 @@ option simply sets the same key.
 - `slint` (winit backend) — the animated config window. A normal dependency so the GUI builds and
   runs on Linux too.
 - `serde` + `serde_json` — config load/save.
+- `embed-manifest` (build dependency) — embeds the `requireAdministrator` Windows manifest. Works
+  when cross-compiling from Linux, so no external MinGW/LLVM tooling is needed.
 
 No async runtime. The app is event-loop driven, which keeps the binary and RAM small.
 

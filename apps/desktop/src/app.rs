@@ -24,7 +24,7 @@ thread_local! {
 pub fn run() -> Result<()> {
     let ui = AppWindow::new().context("failed to create VOLE window")?;
     let store = ConfigStore::new()?;
-    let config = store.load()?;
+    let config = reconcile_autostart(&store, store.load()?);
     let mut runtime = Runtime::new(store, config)?;
     runtime.register_hotkeys()?;
     runtime.refresh_applications()?;
@@ -194,6 +194,24 @@ impl Runtime {
         };
         self.fire(index)
     }
+}
+
+// The scheduled task is the source of truth for autostart, so mirror its state
+// into the config on launch. This keeps the stored flag honest if the task was
+// added or removed outside the app.
+#[cfg(windows)]
+fn reconcile_autostart(store: &ConfigStore, mut config: Config) -> Config {
+    let enabled = crate::autostart::is_enabled();
+    if config.launch_on_startup != enabled {
+        config.launch_on_startup = enabled;
+        let _ = store.save(&config);
+    }
+    config
+}
+
+#[cfg(not(windows))]
+fn reconcile_autostart(_store: &ConfigStore, config: Config) -> Config {
+    config
 }
 
 fn with_runtime<T>(operation: impl FnOnce(&mut Runtime) -> Result<T>) -> Result<T> {

@@ -36,6 +36,7 @@ windows = { version = "0.62.2", features = [
 ] }
 
 [build-dependencies]
+embed-manifest = "1.5.0"
 slint-build = "1.17.1"
 
 [lints]
