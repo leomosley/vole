@@ -22,12 +22,16 @@ SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\vole.exe
 CloseApplications=yes
+RestartApplications=no
+UsePreviousAppDir=yes
+UsePreviousGroup=yes
+UsePreviousTasks=yes
 
 [Tasks]
 Name: "startup"; Description: "Launch VOLE when I sign in"; GroupDescription: "Startup:"; Flags: checkedonce
 
 [Files]
-Source: "..\target\release\vole.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\target\release\vole.exe"; DestDir: "{app}"; Flags: ignoreversion restartreplace
 
 [Icons]
 Name: "{group}\VOLE"; Filename: "{app}\vole.exe"

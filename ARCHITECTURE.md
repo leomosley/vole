@@ -244,6 +244,10 @@ Inno Setup produces a small `.exe` installer: it installs the binary, adds a Sta
 and an Add/Remove Programs entry, offers a "Launch on startup" checkbox that sets the `Run` key,
 and ships a clean uninstaller.
 
+The stable Inno `AppId` makes subsequent installers upgrades rather than side-by-side installs.
+An upgrade closes the running process and replaces app files in place. Configuration lives outside
+the install directory under `%APPDATA%`, so upgrades preserve it.
+
 ### Public releases (`release.yml`)
 
 Triggered on a version tag on `main`. On a `windows-latest` runner: build the release binary,
