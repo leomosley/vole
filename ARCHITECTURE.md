@@ -92,17 +92,14 @@ vole/
 
 ### Event loop model
 
-A single winit event loop on the main thread services everything. This avoids juggling multiple
+A single Slint event loop on the main thread services everything. This avoids juggling multiple
 OS message loops or threads.
 
 - `global-hotkey` registers hotkeys (it uses `RegisterHotKey` under the hood on Windows) and
-  emits events into the loop.
-- `tray-icon` provides the tray icon and context menu, emitting menu events into the same loop.
-- Slint's winit backend renders the config window on the same loop when it is open.
-
-The one integration risk to prove first is that these three share the loop cleanly. Build a
-throwaway spike that opens a tray menu, fires a hotkey, and opens/closes a Slint window on one
-loop before layering features on top.
+  forwards events from its hidden Win32 window to the Slint loop.
+- `tray-icon` provides the tray icon and context menu and uses the same thread's Win32 message
+  queue.
+- Slint's winit backend owns the event loop and renders the config window when it is open.
 
 When idle, the loop is blocked waiting for OS events, so CPU use is effectively zero.
 
