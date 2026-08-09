@@ -1,0 +1,178 @@
+---
+import Retro from "../layouts/Retro.astro";
+
+const releaseLatest = "https://github.com/leomosley/vole/releases/latest";
+
+const faqs = [
+  {
+    q: "Is this actually a trojan?",
+    a: "No. It's a genuine open-source Windows tray app. The site is a joke about looking like one \u2014 read the source before trusting us.",
+  },
+  {
+    q: "Why does Windows say \u201Cunknown publisher\u201D?",
+    a: "The installer is unsigned, so SmartScreen warns. Click <i>More info \u2192 Run anyway</i>.",
+  },
+  {
+    q: "Will it get me banned?",
+    a: "It uses the standard RegisterHotKey mechanism, not low-level hooks, to stay compatible with Vanguard, EAC and BattlEye.",
+  },
+  {
+    q: "Does it phone home?",
+    a: "No cloud, no account, no telemetry. Config is a JSON file in %APPDATA%\\VOLE.",
+  },
+];
+---
+
+<Retro
+  title="VOLE.EXE :: DOCS & F.A.Q."
+  tagline="* R.T.F.M. * READ THE FRIENDLY MANUAL *"
+  active="docs"
+>
+  <section class="panel">
+    <h2>HOW IT WORKS</h2>
+    <p>
+      VOLE is a single native <b>Rust</b> binary in your system tray. It listens for
+      your global hotkeys; on a keypress it reaches into the Windows volume mixer
+      (Core Audio) and changes the volume of the apps you chose. The config window
+      is only built when you open it, so gaming costs nothing.
+    </p>
+    <p>The whole model is three words:</p>
+    <ul>
+      <li>
+        <b>Hotkey</b> &mdash; a key combo (e.g. <code>Ctrl+Alt+G</code>) with
+        one or more actions, optionally a <b>toggle</b>.
+      </li>
+      <li>
+        <b>Target</b> &mdash; a named process (<code>Discord.exe</code>) or the
+        <code>foreground</code> window.
+      </li>
+      <li>
+        <b>Operation</b> &mdash; <code>set</code> a level, <code>adjust</code> by
+        a delta, or <code>mute</code>.
+      </li>
+    </ul>
+    <p>
+      Mark a hotkey <b>toggle</b> and the first press snapshots current volumes; the
+      next restores them. That's how "set to 20%" becomes a duck.
+    </p>
+  </section>
+
+  <section class="panel install">
+    <h2>INSTALLING</h2>
+    <ol>
+      <li>
+        Grab the latest <code>VOLE-Setup-*.exe</code> from
+        <a href={releaseLatest} target="_blank" rel="noopener"
+          >GitHub Releases</a
+        >.
+      </li>
+      <li>
+        Run it (it elevates to admin) and, on the SmartScreen warning, choose
+        <i>More info &rarr; Run anyway</i>.
+      </li>
+      <li>
+        Open the tray icon &rarr; <i>Open config</i>, bind your hotkeys, and use
+        the per-app <i>Test-fire</i> button to confirm the right session.
+      </li>
+    </ol>
+    <div class="install__admin">
+      <img src="/vole.png" alt="" width="44" height="44" />
+      <p>
+        <b>Why admin?</b> Windows won't deliver hotkeys to a lower-privilege app while
+        an elevated, anti-cheat-protected game is focused. Running elevated keeps
+        your hotkeys alive mid-match.
+      </p>
+    </div>
+    <a
+      class="install__cta"
+      href={releaseLatest}
+      target="_blank"
+      rel="noopener"
+      data-blip
+    >
+      &#9660; DOWNLOAD THE INSTALLER &#9660;
+    </a>
+  </section>
+
+  <section class="panel faq">
+    <h2>F.A.Q.</h2>
+    <dl>
+      {
+        faqs.map((f) => (
+          <>
+            <dt>{f.q}</dt>
+            <dd set:html={f.a} />
+          </>
+        ))
+      }
+    </dl>
+    <p class="faq__foot">
+      More in <a
+        href="https://github.com/leomosley/vole"
+        target="_blank"
+        rel="noopener">the repository</a
+      >.
+    </p>
+  </section>
+
+  <style>
+    code {
+      background: #fff;
+      border: 1px solid var(--silver-dark);
+      padding: 0 4px;
+      font-family: "Courier New", monospace;
+    }
+
+    .install ol {
+      font-size: 17px;
+      line-height: 1.7;
+    }
+    .install__admin {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      background: #fff8dc;
+      border: 2px dashed #b8860b;
+      padding: 10px 12px;
+      margin: 12px 0;
+    }
+    .install__admin img {
+      image-rendering: pixelated;
+      flex: 0 0 auto;
+    }
+    .install__admin p {
+      margin: 0;
+      font-size: 15px;
+    }
+    .install__cta {
+      display: inline-block;
+      text-align: center;
+      font-family: "Impact", sans-serif;
+      letter-spacing: 2px;
+      font-size: 22px;
+      color: #fff;
+      text-decoration: none;
+      padding: 12px 20px;
+      background: linear-gradient(#3a7bff, #0033aa);
+      border: 4px outset #9dc0ff;
+      box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.4);
+    }
+
+    .faq dt {
+      font-weight: bold;
+      color: #7a0000;
+      font-family: "Arial", sans-serif;
+      margin-top: 12px;
+    }
+    .faq dd {
+      margin: 4px 0 0;
+      padding-left: 16px;
+      border-left: 3px solid var(--silver);
+      font-size: 16px;
+    }
+    .faq__foot {
+      font-style: italic;
+      margin-top: 16px;
+    }
+  </style>
+</Retro>

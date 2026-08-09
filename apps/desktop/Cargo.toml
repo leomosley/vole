@@ -1,0 +1,46 @@
+[package]
+name = "vole"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+build = "build.rs"
+
+[dependencies]
+anyhow.workspace = true
+directories.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+slint = { version = "1.17.1", default-features = false, features = [
+  "backend-winit",
+  "compat-1-2",
+  "renderer-software",
+  "std",
+] }
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+global-hotkey = "0.8.0"
+png = "0.17.16"
+tray-icon = { version = "0.24.2", default-features = false }
+windows = { version = "0.62.2", features = [
+  "Win32_Foundation",
+  "Win32_Media_Audio",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Threading",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_System_Variant",
+] }
+
+[build-dependencies]
+embed-manifest = "1.5.0"
+embed-resource = "3"
+slint-build = "1.17.1"
+
+[lints]
+workspace = true

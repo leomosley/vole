@@ -1,0 +1,378 @@
+---
+import Retro from "../layouts/Retro.astro";
+
+const releaseLatest = "https://github.com/leomosley/vole/releases/latest";
+
+const features = [
+  {
+    icon: "\u2328",
+    title: "Global hotkeys",
+    body: "Duck your game or mute Discord mid-match, no alt-tab.",
+  },
+  {
+    icon: "\uD83C\uDF9A",
+    title: "Per-app volume",
+    body: "Straight into the Windows mixer. Many apps, one keypress.",
+  },
+  {
+    icon: "\uD83E\uDEB6",
+    title: "Tiny footprint",
+    body: "Single-digit MB RAM, ~0% idle CPU.",
+  },
+  {
+    icon: "\uD83D\uDEE1",
+    title: "Anti-cheat safe",
+    body: "Standard RegisterHotKey, no low-level hooks.",
+  },
+];
+
+// Fake banner "adverts" scattered around the page margins. Each is a decoy that
+// just spawns a popup; the one real download stays in the hero. Positions live
+// in inline styles so they sit at odd spots in the gutters like real ad units.
+const ads = [
+  {
+    label: "DOWNLOAD",
+    sub: "start download \u00bb",
+    cls: "ad--green",
+    pos: "top: 210px; left: 8px; --tilt: -4deg;",
+  },
+  {
+    label: "FREE DOWNLOAD",
+    sub: "high speed \u2b07",
+    cls: "ad--blue",
+    pos: "top: 96px; right: 10px; --tilt: 3deg;",
+  },
+  {
+    label: "\u25B6 PLAY NOW",
+    sub: "1 quick survey",
+    cls: "ad--red",
+    pos: "top: 430px; right: 6px; --tilt: -6deg;",
+  },
+  {
+    label: "GET IT FREE",
+    sub: "secure \uD83D\uDD12 mirror",
+    cls: "ad--orange",
+    pos: "top: 560px; left: 4px; --tilt: 5deg;",
+  },
+  {
+    label: "Download.exe",
+    sub: "no wait \u2022 0 ads",
+    cls: "ad--green",
+    pos: "top: 760px; right: 14px; --tilt: -3deg;",
+  },
+  {
+    label: "\uD83D\uDD25 HOT DEAL",
+    sub: "click before it's gone",
+    cls: "ad--blue",
+    pos: "top: 880px; left: 10px; --tilt: 4deg;",
+  },
+];
+---
+
+<Retro
+  title="VOLE.EXE :: DOWNLOAD NOW!!!"
+  tagline=">>> DOWNLOAD V.O.L.E. TODAY <<<"
+  active="home"
+>
+  <section class="panel hero">
+    <div class="hero__copy">
+      <h2>YOUR PC IS <u>400% TOO LOUD</u></h2>
+      <p>
+        <strong>V.O.L.E.</strong> is a lightweight Windows tray app that binds global
+        hotkeys to per-app volume. Definitely not a trojan. <a href="/docs"
+          >See how it works &raquo;</a
+        >
+      </p>
+
+      <div class="download">
+        <a
+          class="download__btn"
+          href={releaseLatest}
+          target="_blank"
+          rel="noopener"
+          data-blip
+        >
+          <span class="download__glyph">&#9660;</span>
+          <span>
+            <strong>DOWNLOAD VOLE.EXE</strong>
+            <small
+              >latest release &middot; Windows installer &middot; FREE*</small
+            >
+          </span>
+        </a>
+        <p class="download__note">
+          * <span class="blink">no credit card.</span> no email. no soul required.
+        </p>
+      </div>
+
+      <ul class="features">
+        {
+          features.map((f) => (
+            <li class="feature">
+              <span class="feature__icon">{f.icon}</span>
+              <span>
+                <b>{f.title}</b> &mdash; {f.body}
+              </span>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+
+    <aside class="hero__mascot">
+      <img src="/vole.png" alt="The VOLE mascot" width="160" height="160" />
+      <p class="hero__mascot-cap">
+        <span class="blink">^ lives in your tray now ^</span>
+      </p>
+      <button class="download__scare" type="button" data-popup data-blip>
+        &#9888; FREE gift &#9888;
+      </button>
+    </aside>
+  </section>
+
+  <div class="ads" aria-hidden="true">
+    {
+      ads.map((a) => (
+        <div class:list={["ad", a.cls]} style={a.pos}>
+          <span class="ad__tag">Advertisement</span>
+          <button
+            class="ad__x"
+            type="button"
+            aria-label="close ad"
+            data-popup
+            data-blip
+          >
+            x
+          </button>
+          <button type="button" class="ad__btn" data-popup data-blip>
+            <span class="ad__glyph">&#11015;</span>
+            <span class="ad__label">{a.label}</span>
+            <span class="ad__sub">{a.sub}</span>
+          </button>
+        </div>
+      ))
+    }
+  </div>
+
+  <style>
+    .hero {
+      display: flex;
+      gap: 20px;
+      align-items: flex-start;
+    }
+    .hero__copy {
+      flex: 1 1 auto;
+    }
+    .hero h2 {
+      font-family: "Impact", "Arial Black", sans-serif;
+      font-size: 34px;
+      color: #7a0000;
+      margin: 0 0 10px;
+      border: none;
+      text-shadow: 2px 2px 0 #d0cabb;
+    }
+
+    .download {
+      margin-top: 14px;
+      padding: 14px;
+      background: #efe9d8;
+      border: 2px dashed var(--silver-dark);
+      text-align: center;
+    }
+    .download__btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      color: #063d06;
+      background: linear-gradient(#a6ff9e, #35a02f);
+      border: 4px outset #c9ffbf;
+      padding: 12px 22px;
+      box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.4);
+      animation: throb 0.9s ease-in-out infinite alternate;
+    }
+    @keyframes throb {
+      to {
+        transform: scale(1.04);
+      }
+    }
+    .download__glyph {
+      font-size: 28px;
+    }
+    .download__btn strong {
+      display: block;
+      font-family: "Impact", sans-serif;
+      font-size: 26px;
+      letter-spacing: 2px;
+    }
+    .download__btn small {
+      display: block;
+      font-family: "Courier New", monospace;
+      font-size: 12px;
+      color: #0a4a0a;
+    }
+    .download__note {
+      margin: 10px 0 0;
+      font-family: "Courier New", monospace;
+      font-size: 13px;
+    }
+    .download__scare {
+      margin-top: 10px;
+      font-family: "Comic Sans MS", "Arial", sans-serif;
+      font-weight: bold;
+      color: #a00;
+      background: #fffb96;
+      border: 2px outset #fff;
+      padding: 6px 12px;
+      cursor: pointer;
+    }
+
+    .features {
+      list-style: none;
+      margin: 14px 0 0;
+      padding: 0;
+    }
+    .feature {
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+      padding: 4px 0;
+      font-size: 16px;
+    }
+    .feature__icon {
+      font-size: 20px;
+    }
+
+    .hero__mascot {
+      flex: 0 0 auto;
+      text-align: center;
+      width: 180px;
+    }
+    .hero__mascot img {
+      image-rendering: pixelated;
+      border: 3px ridge var(--silver);
+      background: #fff;
+      filter: drop-shadow(3px 3px 0 rgba(0, 0, 0, 0.4));
+    }
+    .hero__mascot-cap {
+      font-size: 12px;
+      color: #333;
+      margin: 6px 0;
+    }
+
+    /* ---- scattered fake ad units ---- */
+    .ads {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 20;
+    }
+    .ad {
+      position: absolute;
+      width: 172px;
+      pointer-events: auto;
+      background: #fffbe6;
+      border: 2px solid #999;
+      padding: 14px 8px 8px;
+      box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.35);
+      transform: rotate(var(--tilt, 0deg));
+    }
+    .ad__tag {
+      position: absolute;
+      top: 0;
+      left: 0;
+      font-family: "Arial", sans-serif;
+      font-size: 9px;
+      color: #666;
+      background: #ddd;
+      border-bottom: 1px solid #bbb;
+      border-right: 1px solid #bbb;
+      padding: 0 4px;
+    }
+    .ad__x {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 16px;
+      height: 16px;
+      line-height: 14px;
+      font-size: 11px;
+      font-weight: bold;
+      color: #333;
+      background: #ddd;
+      border: 1px solid #999;
+      cursor: pointer;
+    }
+    .ad__btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1px;
+      width: 100%;
+      padding: 8px 4px;
+      cursor: pointer;
+      color: #fff;
+      font-family: "Arial", sans-serif;
+      border: 3px outset #fff;
+      text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.5);
+    }
+    .ad__btn:active {
+      border-style: inset;
+    }
+    .ad__glyph {
+      font-size: 18px;
+      animation: bob 0.7s ease-in-out infinite alternate;
+    }
+    @keyframes bob {
+      to {
+        transform: translateY(3px);
+      }
+    }
+    .ad__label {
+      font-family: "Impact", "Arial Black", sans-serif;
+      font-size: 18px;
+      letter-spacing: 1px;
+    }
+    .ad__sub {
+      font-family: "Courier New", monospace;
+      font-size: 10px;
+    }
+    .ad--green .ad__btn {
+      background: linear-gradient(#7ee787, #1a9e2e);
+      border-color: #b8ffbf;
+    }
+    .ad--blue .ad__btn {
+      background: linear-gradient(#7fb8ff, #1440c0);
+      border-color: #c2dbff;
+    }
+    .ad--orange .ad__btn {
+      background: linear-gradient(#ffcc66, #e07a00);
+      border-color: #ffe6b3;
+    }
+    .ad--red .ad__btn {
+      background: linear-gradient(#ff8a8a, #c00000);
+      border-color: #ffc2c2;
+      animation: dodgyblink 1.1s steps(1) infinite;
+    }
+    @keyframes dodgyblink {
+      50% {
+        filter: brightness(1.4) saturate(1.6);
+      }
+    }
+
+    @media (max-width: 1100px) {
+      .ads {
+        display: none;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .hero {
+        flex-direction: column;
+      }
+      .hero__mascot {
+        width: 100%;
+      }
+    }
+  </style>
+</Retro>
