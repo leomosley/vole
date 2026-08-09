@@ -1,4 +1,11 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
+#[cfg(windows)]
 fn main() -> anyhow::Result<()> {
-    let _config = vole::config::ConfigStore::new()?.load()?;
-    Ok(())
+    vole::run()
+}
+
+#[cfg(not(windows))]
+fn main() {
+    eprintln!("VOLE runs on Windows only");
 }

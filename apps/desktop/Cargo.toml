@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+build = "build.rs"
 
 [dependencies]
 anyhow.workspace = true
@@ -13,6 +14,14 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+global-hotkey = "0.8.0"
+slint = { version = "1.17.1", default-features = false, features = [
+  "backend-winit",
+  "compat-1-2",
+  "renderer-software",
+  "std",
+] }
+tray-icon = { version = "0.24.2", default-features = false }
 windows = { version = "0.62.2", features = [
   "Win32_Foundation",
   "Win32_Media_Audio",
@@ -22,6 +31,9 @@ windows = { version = "0.62.2", features = [
   "Win32_UI_WindowsAndMessaging",
   "Win32_System_Variant",
 ] }
+
+[build-dependencies]
+slint-build = "1.17.1"
 
 [lints]
 workspace = true

@@ -1,0 +1,124 @@
+import { Button, TextEdit } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    title: "VOLE";
+    width: 820px;
+    height: 620px;
+    background: #100d18;
+
+    in property <string> config-text;
+    in property <string> status-text: "Ready";
+    in property <bool> status-error: false;
+    callback save(string);
+    callback reset;
+
+    VerticalLayout {
+        padding: 28px;
+        spacing: 18px;
+
+        HorizontalLayout {
+            vertical-stretch: 0;
+            spacing: 16px;
+
+            Rectangle {
+                width: 54px;
+                height: 54px;
+                border-radius: 16px;
+                background: #9d6cff;
+
+                Text {
+                    text: "V";
+                    color: #100d18;
+                    font-size: 30px;
+                    font-weight: 800;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 2px;
+                Text {
+                    text: "Volume Output Level Executioner";
+                    color: #f8f5ff;
+                    font-size: 24px;
+                    font-weight: 700;
+                }
+                Text {
+                    text: "Hotkeys that put every app exactly where you want it.";
+                    color: #a9a2b9;
+                    font-size: 14px;
+                }
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            border-radius: 18px;
+            background: #1a1625;
+            border-width: 1px;
+            border-color: #302943;
+
+            VerticalLayout {
+                padding: 18px;
+                spacing: 12px;
+
+                HorizontalLayout {
+                    vertical-stretch: 0;
+                    Text {
+                        text: "Hotkey configuration";
+                        color: #f8f5ff;
+                        font-size: 16px;
+                        font-weight: 700;
+                    }
+                    Text {
+                        text: "JSON · changes apply immediately";
+                        color: #756e84;
+                        font-size: 12px;
+                        horizontal-alignment: right;
+                    }
+                }
+
+                config-editor := TextEdit {
+                    text: root.config-text;
+                    font-family: "Consolas";
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            vertical-stretch: 0;
+            spacing: 12px;
+
+            Rectangle {
+                horizontal-stretch: 1;
+                border-radius: 10px;
+                background: root.status-error ? #3a1724 : #172d27;
+                min-height: 38px;
+
+                Text {
+                    text: root.status-text;
+                    color: root.status-error ? #ff9cad : #8de0bf;
+                    font-size: 12px;
+                    overflow: elide;
+                    vertical-alignment: center;
+                    x: 12px;
+                    width: parent.width - 24px;
+                }
+            }
+
+            Button {
+                text: "Reset";
+                clicked => { root.reset(); }
+            }
+
+            Button {
+                text: "Save & activate";
+                primary: true;
+                clicked => { root.save(config-editor.text); }
+            }
+        }
+    }
+}
