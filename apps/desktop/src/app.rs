@@ -908,7 +908,9 @@ fn vole_icon() -> Result<tray_icon::Icon> {
 #[cfg(windows)]
 fn decode_png_rgba(bytes: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
     let decoder = png::Decoder::new(bytes);
-    let mut reader = decoder.read_info().context("failed to read VOLE icon header")?;
+    let mut reader = decoder
+        .read_info()
+        .context("failed to read VOLE icon header")?;
     let mut buffer = vec![0; reader.output_buffer_size()];
     let info = reader
         .next_frame(&mut buffer)
