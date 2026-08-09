@@ -107,7 +107,10 @@ When idle, the loop is blocked waiting for OS events, so CPU use is effectively 
 
 Single binary crate with internal modules:
 
-- `audio` — enumerate audio sessions, resolve a target to session(s), get/set volume, toggle mute.
+- `audio` — enumerate audio sessions, resolve a target to session(s), get/set volume and mute,
+  snapshot/restore state for toggle hotkeys.
+- `catalog` — build the application picker: curated common apps, installed Start Menu apps, and
+  anything currently producing audio, with running apps and common apps weighted to the top.
 - `hotkeys` — register hotkeys from config, map an incoming hotkey event to its bound actions.
 - `config` — load, validate, and save the JSON config; owns the typed schema.
 - `tray` — tray icon and context menu (Open config, Enable/Disable, Quit).
@@ -133,9 +136,10 @@ Core Audio call chain: `IMMDeviceEnumerator` -> default render device -> `IAudio
 
 ### Hotkeys, actions, and operations
 
-A hotkey owns a **list of actions**. Each action pairs one **target** with one **operation**.
-This is what lets a single hotkey do several unrelated things at once — for example, relative-adjust
-one app down, set another to 50%, and mute a third, all on the same keypress.
+A hotkey owns a **list of actions** plus a **toggle** flag. Each action pairs one **target** with
+one **operation**. The action list is what lets a single hotkey do several unrelated things at once
+— for example, relative-adjust one app down, set another to 50%, and mute a third, all on the same
+keypress.
 
 Targets:
 
@@ -146,58 +150,65 @@ Operations:
 
 - `set` — set the target to an absolute level (0.0–1.0).
 - `adjust` — nudge the target by a relative delta (e.g. -0.10).
-- `mute_toggle` — mute or unmute the target.
-- `toggle_duck` — press once to drop the target to a low level, press again to restore the level
-  it had before ducking. This is the primary "let me hear Discord" operation and is the one op
-  that carries per-hotkey runtime state (the remembered pre-duck level).
+- `mute` — set the target's mute state (`{ "muted": true | false }`).
+
+### Toggle mode
+
+Any hotkey can be marked `toggle`. On the first press VOLE snapshots the level and mute state of
+every session the hotkey touches, then applies its actions. On the next press it restores that
+snapshot instead of re-applying. This generalises the old duck/mute-toggle behaviour to every
+operation: a `set`-to-low hotkey becomes a duck, a `mute` hotkey becomes a mute-toggle, and so on.
+The snapshot is held in memory, keyed per hotkey by resolved session PID, and is not persisted — a
+fresh launch starts with a clean slate.
 
 ### Config schema
 
 Stored at `%APPDATA%\VOLE\config.json`. Schema-driven: the raw file is normalized, validated once
 (defaults applied, duplicate keybinds and conflicts detected), then mapped declaratively to runtime
-handlers with no further branching.
+handlers with no further branching. Older `version: 1` files are migrated in place on load
+(`toggle_mute`/`toggle_duck` operations become `mute`/`set` with the hotkey's `toggle` flag set).
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "hotkeys": [
     {
       "id": "gaming-focus",
-      "keys": "Ctrl+Alt+G",
+      "name": "Gaming focus",
+      "shortcut": "Ctrl+Alt+G",
+      "enabled": true,
+      "toggle": false,
       "actions": [
         {
           "target": { "type": "foreground" },
-          "op": { "type": "set", "level": 0.3 }
+          "operation": { "type": "set", "level": 0.3 }
         },
         {
-          "target": { "type": "process", "name": "Spotify.exe" },
-          "op": { "type": "adjust", "delta": -0.2 }
+          "target": { "type": "process", "executable": "Spotify.exe" },
+          "operation": { "type": "adjust", "delta": -0.2 }
         },
         {
-          "target": { "type": "process", "name": "chrome.exe" },
-          "op": { "type": "mute_toggle" }
+          "target": { "type": "process", "executable": "chrome.exe" },
+          "operation": { "type": "mute", "muted": true }
         }
       ]
     },
     {
       "id": "hear-discord",
-      "keys": "Ctrl+Alt+D",
+      "name": "Hear Discord",
+      "shortcut": "Ctrl+Alt+D",
+      "enabled": true,
+      "toggle": true,
       "actions": [
         {
           "target": { "type": "foreground" },
-          "op": { "type": "toggle_duck", "low": 0.2 }
+          "operation": { "type": "set", "level": 0.2 }
         }
       ]
     }
   ]
 }
 ```
-
-### Duck state
-
-`toggle_duck` needs to remember the pre-duck level so it can restore it on the second press. This
-state is held in memory, keyed per hotkey (and per resolved session), and is not persisted — a
-fresh launch starts un-ducked.
 
 ### Autostart
 
