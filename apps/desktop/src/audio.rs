@@ -24,6 +24,11 @@ use windows::core::{Interface, PWSTR};
 
 use crate::config::{Action, Operation, Target};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudioApplication {
+    pub executable: String,
+}
+
 pub struct AudioController {
     _com: ComApartment,
     devices: IMMDeviceEnumerator,
@@ -58,6 +63,20 @@ impl AudioController {
         }
 
         Ok(())
+    }
+
+    pub fn applications(&self) -> Result<Vec<AudioApplication>> {
+        let mut applications = self
+            .sessions()?
+            .into_iter()
+            .filter_map(|session| session.executable)
+            .map(|executable| AudioApplication { executable })
+            .collect::<Vec<_>>();
+        applications
+            .sort_unstable_by_key(|application| application.executable.to_ascii_lowercase());
+        applications
+            .dedup_by(|left, right| left.executable.eq_ignore_ascii_case(&right.executable));
+        Ok(applications)
     }
 
     fn sessions(&self) -> Result<Vec<AudioSession>> {
