@@ -4,6 +4,9 @@ pub mod config;
 pub mod audio;
 
 #[cfg(windows)]
+pub mod catalog;
+
+#[cfg(windows)]
 mod app;
 
 #[cfg(windows)]
