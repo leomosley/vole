@@ -539,7 +539,7 @@ export component AppWindow inherits Window {
     VerticalLayout {
         padding: 0px;
 
-        // Title bar: vole mark, wordmark, and the startup toggle.
+        // Title bar: wordmark and the startup toggle.
         Rectangle {
             vertical-stretch: 0;
             height: 48px;
@@ -549,15 +549,6 @@ export component AppWindow inherits Window {
                 padding-right: 12px;
                 spacing: 10px;
 
-                VerticalLayout {
-                    alignment: center;
-                    Image {
-                        source: @image-url("../../../assets/vole.png");
-                        width: 24px;
-                        height: 24px;
-                        image-fit: contain;
-                    }
-                }
                 VerticalLayout {
                     alignment: center;
                     spacing: 1px;
