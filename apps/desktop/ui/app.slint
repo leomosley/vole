@@ -1,13 +1,85 @@
 import { Button, CheckBox, ComboBox, LineEdit, ListView, SpinBox } from "std-widgets.slint";
 
-export struct ApplicationRow { name: string }
-export struct HotkeyRow { name: string, shortcut: string, action-count: int, enabled: bool }
-export struct ActionRow { target: string, operation: string }
+export struct ApplicationRow {
+    display: string,
+    executable: string,
+    running: bool,
+}
+export struct HotkeyRow {
+    name: string,
+    shortcut: string,
+    action-count: int,
+    enabled: bool,
+    toggle: bool,
+}
+export struct ActionRow {
+    target: string,
+    operation: string,
+}
+
+component HotkeyRecorder inherits Rectangle {
+    in property <string> shortcut;
+    callback captured(string, bool, bool, bool, bool);
+
+    height: 42px;
+    border-radius: 10px;
+    background: fs.has-focus ? #2a2350 : #222938;
+    border-width: 1px;
+    border-color: fs.has-focus ? #a779ff : #333b4b;
+
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Control || event.text == Key.Alt || event.text == Key.Shift || event.text == Key.Meta) {
+                return EventResult.accept;
+            }
+            root.captured(event.text, event.modifiers.control, event.modifiers.alt, event.modifiers.shift, event.modifiers.meta);
+            return EventResult.accept;
+        }
+    }
+
+    if fs.has-focus: Text {
+        x: 14px;
+        vertical-alignment: center;
+        text: "Press a key combination…";
+        color: #cbb8ff;
+        font-size: 13px;
+    }
+    if !fs.has-focus && root.shortcut == "": Text {
+        x: 14px;
+        vertical-alignment: center;
+        text: "Click to record a shortcut";
+        color: #6f7889;
+        font-size: 13px;
+    }
+    if !fs.has-focus && root.shortcut != "": Text {
+        x: 14px;
+        vertical-alignment: center;
+        text: root.shortcut;
+        color: #e7e1f0;
+        font-family: "Consolas";
+        font-size: 14px;
+    }
+    Text {
+        x: parent.width - self.width - 14px;
+        vertical-alignment: center;
+        text: fs.has-focus ? "listening" : "record";
+        color: #8b93a4;
+        font-size: 10px;
+    }
+
+    TouchArea {
+        clicked => {
+            fs.focus();
+        }
+    }
+}
 
 export component AppWindow inherits Window {
     title: "VOLE";
-    width: 1080px;
-    height: 700px;
+    min-width: 1040px;
+    min-height: 680px;
+    preferred-width: 1120px;
+    preferred-height: 720px;
     background: #0d1017;
 
     in property <[ApplicationRow]> applications;
@@ -18,22 +90,25 @@ export component AppWindow inherits Window {
     in property <string> selected-name;
     in property <string> selected-shortcut;
     in property <bool> selected-enabled;
+    in property <bool> selected-toggle;
     in property <string> selected-target;
     in property <int> selected-operation;
-    in property <int> selected-value: 20;
+    in property <int> selected-value: 50;
+    in property <bool> selected-muted;
     in property <string> status-text: "Ready";
     in property <bool> status-error: false;
 
     callback search-applications(string);
-    callback refresh-applications;
+    callback refresh-applications();
     callback select-hotkey(int);
-    callback add-hotkey;
+    callback add-hotkey();
     callback remove-hotkey(int);
-    callback update-hotkey(int, string, string, bool);
+    callback update-hotkey(int, string, bool, bool);
+    callback record-shortcut(string, bool, bool, bool, bool);
     callback select-action(int);
     callback add-action(string);
     callback remove-action(int, int);
-    callback update-action(int, int, string, int, int);
+    callback update-action(int, int, string, int, int, bool);
 
     VerticalLayout {
         padding: 22px;
@@ -43,141 +118,509 @@ export component AppWindow inherits Window {
             vertical-stretch: 0;
             spacing: 14px;
             Rectangle {
-                width: 46px; height: 46px; border-radius: 13px; background: #a779ff;
-                Text { text: "V"; color: #0d1017; font-size: 27px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                width: 46px;
+                height: 46px;
+                border-radius: 13px;
+                background: #a779ff;
+                Text {
+                    text: "V";
+                    color: #0d1017;
+                    font-size: 27px;
+                    font-weight: 800;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
             }
             VerticalLayout {
                 spacing: 1px;
-                Text { text: "VOLE signal deck"; color: #f5f1ff; font-size: 23px; font-weight: 700; }
-                Text { text: "Route one keypress across every application that matters."; color: #9299a8; font-size: 13px; }
+                Text {
+                    text: "VOLE signal deck";
+                    color: #f5f1ff;
+                    font-size: 23px;
+                    font-weight: 700;
+                }
+                Text {
+                    text: "Route one keypress across every application that matters.";
+                    color: #9299a8;
+                    font-size: 13px;
+                }
             }
-            Rectangle { horizontal-stretch: 1; }
             Rectangle {
-                width: 230px; height: 36px; border-radius: 10px;
+                horizontal-stretch: 1;
+            }
+            Rectangle {
+                width: 240px;
+                height: 36px;
+                border-radius: 10px;
                 background: root.status-error ? #381923 : #132d27;
-                Text { x: 12px; width: parent.width - 24px; text: root.status-text; color: root.status-error ? #ff9eb0 : #87dfbd; font-size: 11px; overflow: elide; vertical-alignment: center; }
+                Text {
+                    x: 12px;
+                    width: parent.width - 24px;
+                    text: root.status-text;
+                    color: root.status-error ? #ff9eb0 : #87dfbd;
+                    font-size: 11px;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
             }
         }
 
         HorizontalLayout {
             spacing: 14px;
 
+            // Applications
             Rectangle {
-                width: 260px; border-radius: 16px; background: #141923; border-width: 1px; border-color: #252c39;
+                width: 280px;
+                border-radius: 16px;
+                background: #141923;
+                border-width: 1px;
+                border-color: #252c39;
                 VerticalLayout {
-                    padding: 14px; spacing: 10px;
+                    padding: 14px;
+                    spacing: 10px;
                     HorizontalLayout {
                         vertical-stretch: 0;
-                        Text { text: "Active audio"; color: #f5f1ff; font-size: 15px; font-weight: 700; }
-                        Button { text: "↻"; clicked => { root.refresh-applications(); } }
+                        spacing: 8px;
+                        Text {
+                            text: "Applications";
+                            color: #f5f1ff;
+                            font-size: 15px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                        Button {
+                            text: "Refresh";
+                            clicked => {
+                                root.refresh-applications();
+                            }
+                        }
                     }
-                    LineEdit { placeholder-text: "Search applications"; edited(value) => { root.search-applications(value); } }
-                    Text { text: "Choose an app to add it to the selected hotkey."; color: #747d8e; font-size: 11px; wrap: word-wrap; vertical-stretch: 0; }
+                    LineEdit {
+                        placeholder-text: "Search all applications";
+                        edited(value) => {
+                            root.search-applications(value);
+                        }
+                    }
                     Rectangle {
-                        height: 42px; border-radius: 10px; background: #222938;
-                        Text { x: 12px; text: "Focused application"; color: #dcd5ea; vertical-alignment: center; }
-                        TouchArea { clicked => { root.add-action(""); } }
+                        height: 42px;
+                        border-radius: 10px;
+                        background: focused-touch.has-hover ? #2b3346 : #222938;
+                        Text {
+                            x: 12px;
+                            text: "Focused application";
+                            color: #dcd5ea;
+                            vertical-alignment: center;
+                        }
+                        focused-touch := TouchArea {
+                            clicked => {
+                                root.add-action("");
+                            }
+                        }
                     }
                     ListView {
                         for app in root.applications: Rectangle {
-                            height: 40px; border-radius: 9px; background: app-touch.has-hover ? #292f40 : transparent;
-                            Text { x: 12px; width: parent.width - 24px; text: app.name; color: #bdc3d0; overflow: elide; vertical-alignment: center; }
-                            app-touch := TouchArea { clicked => { root.add-action(app.name); } }
+                            height: 44px;
+                            border-radius: 9px;
+                            background: app-touch.has-hover ? #262d3d : transparent;
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                spacing: 8px;
+                                Rectangle {
+                                    width: 8px;
+                                    height: 8px;
+                                    y: parent.height / 2 - 4px;
+                                    border-radius: 4px;
+                                    background: app.running ? #58d999 : #3b4354;
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    Text {
+                                        text: app.display;
+                                        color: #d4d9e4;
+                                        font-size: 13px;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: app.executable;
+                                        color: #6c7688;
+                                        font-size: 10px;
+                                        overflow: elide;
+                                    }
+                                }
+                            }
+                            app-touch := TouchArea {
+                                clicked => {
+                                    root.add-action(app.executable);
+                                }
+                            }
                         }
                     }
                 }
             }
 
+            // Hotkeys
             Rectangle {
-                width: 280px; border-radius: 16px; background: #141923; border-width: 1px; border-color: #252c39;
+                width: 280px;
+                border-radius: 16px;
+                background: #141923;
+                border-width: 1px;
+                border-color: #252c39;
                 VerticalLayout {
-                    padding: 14px; spacing: 10px;
+                    padding: 14px;
+                    spacing: 10px;
                     HorizontalLayout {
                         vertical-stretch: 0;
-                        Text { text: "Hotkeys"; color: #f5f1ff; font-size: 15px; font-weight: 700; }
-                        Button { text: "+ New"; clicked => { root.add-hotkey(); } }
+                        spacing: 8px;
+                        Text {
+                            text: "Hotkeys";
+                            color: #f5f1ff;
+                            font-size: 15px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                        Button {
+                            text: "Add";
+                            clicked => {
+                                root.add-hotkey();
+                            }
+                        }
                     }
                     ListView {
                         for binding[index] in root.hotkeys: Rectangle {
-                            height: 72px; border-radius: 11px;
-                            background: index == root.selected-hotkey ? #2b2142 : (binding-touch.has-hover ? #202633 : transparent);
-                            VerticalLayout {
-                                padding: 10px; spacing: 4px;
-                                Text { text: binding.name; color: #eee9f8; font-size: 13px; font-weight: 600; overflow: elide; }
-                                HorizontalLayout {
-                                    Text { text: binding.shortcut; color: #ae83ff; font-family: "Consolas"; font-size: 11px; }
-                                    Text { text: binding.action-count + (binding.action-count == 1 ? " action" : " actions"); color: #737c8d; font-size: 10px; horizontal-alignment: right; }
+                            height: 74px;
+                            border-radius: 11px;
+                            background: binding-touch.has-hover ? #202633 : #161b25;
+                            border-width: index == root.selected-hotkey ? 1px : 0;
+                            border-color: #a779ff;
+                            HorizontalLayout {
+                                padding: 10px;
+                                spacing: 6px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 4px;
+                                    Text {
+                                        text: binding.name;
+                                        color: #eee9f8;
+                                        font-size: 13px;
+                                        font-weight: 600;
+                                        overflow: elide;
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        Text {
+                                            text: binding.shortcut == "" ? "unset" : binding.shortcut;
+                                            color: #ae83ff;
+                                            font-family: "Consolas";
+                                            font-size: 11px;
+                                        }
+                                        Text {
+                                            text: binding.toggle ? "toggle" : "one-shot";
+                                            color: #737c8d;
+                                            font-size: 10px;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            text: binding.enabled ? "" : "disabled";
+                                            color: #d98f8f;
+                                            font-size: 10px;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                }
+                                Rectangle {
+                                    width: 26px;
+                                    height: 26px;
+                                    y: parent.height / 2 - 13px;
+                                    border-radius: 7px;
+                                    background: delete-touch.has-hover ? #4a2230 : #232a37;
+                                    Text {
+                                        text: "✕";
+                                        color: delete-touch.has-hover ? #ff9eb0 : #8b93a4;
+                                        font-size: 13px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    delete-touch := TouchArea {
+                                        clicked => {
+                                            root.remove-hotkey(index);
+                                        }
+                                    }
                                 }
                             }
-                            binding-touch := TouchArea { clicked => { root.select-hotkey(index); } }
+                            binding-touch := TouchArea {
+                                clicked => {
+                                    root.select-hotkey(index);
+                                }
+                            }
                         }
                     }
                 }
             }
 
+            // Detail
             Rectangle {
-                horizontal-stretch: 1; border-radius: 16px; background: #171c27; border-width: 1px; border-color: #293140;
+                horizontal-stretch: 1;
+                border-radius: 16px;
+                background: #171c27;
+                border-width: 1px;
+                border-color: #293140;
                 VerticalLayout {
-                    padding: 18px; spacing: 14px;
+                    padding: 18px;
+                    spacing: 14px;
+
                     if root.selected-hotkey < 0: VerticalLayout {
-                        Text { text: "Build your first signal chain"; color: #f5f1ff; font-size: 20px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
-                        Text { text: "Create a hotkey, then choose applications from the live audio list."; color: #858e9e; font-size: 13px; horizontal-alignment: center; }
-                        Button { text: "Create hotkey"; primary: true; clicked => { root.add-hotkey(); } }
-                    }
-                    if root.selected-hotkey >= 0: VerticalLayout {
-                        spacing: 13px;
-                        Text { text: "Hotkey details"; color: #f5f1ff; font-size: 16px; font-weight: 700; }
+                        alignment: center;
+                        spacing: 10px;
+                        Text {
+                            text: "Build your first signal chain";
+                            color: #f5f1ff;
+                            font-size: 20px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                        }
+                        Text {
+                            text: "Add a hotkey, record a shortcut, then attach applications.";
+                            color: #858e9e;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                        }
                         HorizontalLayout {
-                            spacing: 10px;
-                            name-field := LineEdit { text: root.selected-name; placeholder-text: "Name"; }
-                            shortcut-field := LineEdit { text: root.selected-shortcut; placeholder-text: "Ctrl+Alt+D"; font-family: "Consolas"; }
-                            enabled-field := CheckBox { text: "Enabled"; checked: root.selected-enabled; }
-                            Button { text: "Apply"; primary: true; clicked => { root.update-hotkey(root.selected-hotkey, name-field.text, shortcut-field.text, enabled-field.checked); } }
-                            Button { text: "Delete"; clicked => { root.remove-hotkey(root.selected-hotkey); } }
+                            alignment: center;
+                            Button {
+                                text: "Add hotkey";
+                                primary: true;
+                                clicked => {
+                                    root.add-hotkey();
+                                }
+                            }
+                        }
+                    }
+
+                    if root.selected-hotkey >= 0: VerticalLayout {
+                        spacing: 12px;
+
+                        Text {
+                            text: "Hotkey";
+                            color: #f5f1ff;
+                            font-size: 16px;
+                            font-weight: 700;
                         }
 
-                        Rectangle { height: 1px; background: #2a3240; }
-                        Text { text: "Signal chain"; color: #f5f1ff; font-size: 15px; font-weight: 700; }
-                        Text { text: "Each row runs from top to bottom when the shortcut fires."; color: #747d8e; font-size: 11px; }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 5px;
+                                Text {
+                                    text: "Name";
+                                    color: #737d8f;
+                                    font-size: 10px;
+                                }
+                                name-field := LineEdit {
+                                    text: root.selected-name;
+                                    placeholder-text: "Name";
+                                }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 5px;
+                                Text {
+                                    text: "Shortcut";
+                                    color: #737d8f;
+                                    font-size: 10px;
+                                }
+                                recorder := HotkeyRecorder {
+                                    shortcut: root.selected-shortcut;
+                                    captured(text, ctrl, alt, shift, meta) => {
+                                        root.record-shortcut(text, ctrl, alt, shift, meta);
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 16px;
+                            enabled-field := CheckBox {
+                                text: "Enabled";
+                                checked: root.selected-enabled;
+                                toggled => {
+                                    root.update-hotkey(root.selected-hotkey, name-field.text, self.checked, toggle-field.checked);
+                                }
+                            }
+                            toggle-field := CheckBox {
+                                text: "Toggle (press again restores previous state)";
+                                checked: root.selected-toggle;
+                                toggled => {
+                                    root.update-hotkey(root.selected-hotkey, name-field.text, enabled-field.checked, self.checked);
+                                }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+                            Button {
+                                text: "Apply name";
+                                clicked => {
+                                    root.update-hotkey(root.selected-hotkey, name-field.text, enabled-field.checked, toggle-field.checked);
+                                }
+                            }
+                        }
 
                         Rectangle {
-                            vertical-stretch: 1; border-radius: 12px; background: #10151e;
+                            height: 1px;
+                            background: #2a3240;
+                        }
+
+                        Text {
+                            text: "Signal chain";
+                            color: #f5f1ff;
+                            font-size: 15px;
+                            font-weight: 700;
+                        }
+                        Text {
+                            text: "Each row runs top to bottom when the shortcut fires. Pick apps on the left.";
+                            color: #747d8e;
+                            font-size: 11px;
+                        }
+
+                        Rectangle {
+                            vertical-stretch: 1;
+                            border-radius: 12px;
+                            background: #10151e;
                             ListView {
                                 for action[index] in root.actions: Rectangle {
-                                    height: 58px; border-radius: 10px;
-                                    background: index == root.selected-action ? #2c2440 : (action-touch.has-hover ? #202735 : transparent);
+                                    height: 56px;
+                                    border-radius: 10px;
+                                    background: action-touch.has-hover ? #202735 : transparent;
+                                    border-width: index == root.selected-action ? 1px : 0;
+                                    border-color: #a779ff;
                                     HorizontalLayout {
-                                        padding: 11px; spacing: 10px;
-                                        Rectangle { width: 8px; height: 8px; border-radius: 4px; background: #a779ff; }
-                                        VerticalLayout {
-                                            Text { text: action.target; color: #e7e1f0; font-size: 13px; font-weight: 600; overflow: elide; }
-                                            Text { text: action.operation; color: #8c96a8; font-size: 11px; }
+                                        padding: 11px;
+                                        spacing: 10px;
+                                        Rectangle {
+                                            width: 8px;
+                                            height: 8px;
+                                            y: parent.height / 2 - 4px;
+                                            border-radius: 4px;
+                                            background: #a779ff;
                                         }
-                                        Text { text: "›"; color: #a779ff; font-size: 20px; vertical-alignment: center; }
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Text {
+                                                text: action.target;
+                                                color: #e7e1f0;
+                                                font-size: 13px;
+                                                font-weight: 600;
+                                                overflow: elide;
+                                            }
+                                            Text {
+                                                text: action.operation;
+                                                color: #8c96a8;
+                                                font-size: 11px;
+                                                overflow: elide;
+                                            }
+                                        }
                                     }
-                                    action-touch := TouchArea { clicked => { root.select-action(index); } }
+                                    action-touch := TouchArea {
+                                        clicked => {
+                                            root.select-action(index);
+                                        }
+                                    }
                                 }
                             }
                         }
 
                         if root.selected-action >= 0: Rectangle {
-                            height: 92px; border-radius: 12px; background: #222936;
-                            HorizontalLayout {
-                                padding: 12px; spacing: 10px;
-                                VerticalLayout {
-                                    Text { text: "Target"; color: #737d8f; font-size: 10px; }
-                                    target-field := LineEdit { text: root.selected-target; placeholder-text: "Discord.exe or Focused application"; }
+                            height: 120px;
+                            border-radius: 12px;
+                            background: #222936;
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 10px;
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        spacing: 4px;
+                                        Text {
+                                            text: "Target";
+                                            color: #737d8f;
+                                            font-size: 10px;
+                                        }
+                                        target-field := LineEdit {
+                                            text: root.selected-target;
+                                            placeholder-text: "Discord.exe or Focused application";
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        width: 160px;
+                                        spacing: 4px;
+                                        Text {
+                                            text: "Operation";
+                                            color: #737d8f;
+                                            font-size: 10px;
+                                        }
+                                        operation-field := ComboBox {
+                                            model: ["Set level", "Adjust level", "Mute"];
+                                            current-index: root.selected-operation;
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        width: 150px;
+                                        spacing: 4px;
+                                        Text {
+                                            text: operation-field.current-index == 1 ? "Change %" : "Level %";
+                                            color: #737d8f;
+                                            font-size: 10px;
+                                            visible: operation-field.current-index != 2;
+                                        }
+                                        value-field := SpinBox {
+                                            value: root.selected-value;
+                                            minimum: operation-field.current-index == 1 ? -100 : 0;
+                                            maximum: 100;
+                                            visible: operation-field.current-index != 2;
+                                        }
+                                        Text {
+                                            text: "State";
+                                            color: #737d8f;
+                                            font-size: 10px;
+                                            visible: operation-field.current-index == 2;
+                                        }
+                                        muted-field := CheckBox {
+                                            text: "Muted";
+                                            checked: root.selected-muted;
+                                            visible: operation-field.current-index == 2;
+                                        }
+                                    }
                                 }
-                                VerticalLayout {
-                                    Text { text: "Operation"; color: #737d8f; font-size: 10px; }
-                                    operation-field := ComboBox { model: ["Set level", "Adjust level", "Toggle mute", "Toggle duck"]; current-index: root.selected-operation; }
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Rectangle {
+                                        horizontal-stretch: 1;
+                                    }
+                                    Button {
+                                        text: "Remove action";
+                                        clicked => {
+                                            root.remove-action(root.selected-hotkey, root.selected-action);
+                                        }
+                                    }
+                                    Button {
+                                        text: "Save action";
+                                        primary: true;
+                                        clicked => {
+                                            root.update-action(root.selected-hotkey, root.selected-action, target-field.text, operation-field.current-index, value-field.value, muted-field.checked);
+                                        }
+                                    }
                                 }
-                                VerticalLayout {
-                                    Text { text: operation-field.current-index == 1 ? "Change %" : "Level %"; color: #737d8f; font-size: 10px; }
-                                    value-field := SpinBox { value: root.selected-value; minimum: operation-field.current-index == 1 ? -100 : 0; maximum: 100; enabled: operation-field.current-index != 2; }
-                                }
-                                Button { text: "Save action"; primary: true; clicked => { root.update-action(root.selected-hotkey, root.selected-action, target-field.text, operation-field.current-index, value-field.value); } }
-                                Button { text: "Remove"; clicked => { root.remove-action(root.selected-hotkey, root.selected-action); } }
                             }
                         }
                     }

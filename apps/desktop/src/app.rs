@@ -9,7 +9,8 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{Icon, TrayIconBuilder};
 
-use crate::audio::{AudioApplication, AudioController};
+use crate::audio::AudioController;
+use crate::catalog::{self, AppEntry};
 use crate::config::{Action, Config, ConfigStore, HotkeyBinding, Operation, Target};
 use crate::{ActionRow, AppWindow, ApplicationRow, HotkeyRow};
 
@@ -48,7 +49,7 @@ struct Runtime {
     hotkeys: GlobalHotKeyManager,
     bindings: HashMap<u32, usize>,
     audio: AudioController,
-    applications: Vec<AudioApplication>,
+    applications: Vec<AppEntry>,
     application_search: String,
 }
 
@@ -66,7 +67,8 @@ impl Runtime {
     }
 
     fn refresh_applications(&mut self) -> Result<()> {
-        self.applications = self.audio.applications()?;
+        let playing = self.audio.applications().unwrap_or_default();
+        self.applications = catalog::build(&playing);
         Ok(())
     }
 
@@ -147,7 +149,7 @@ impl Runtime {
             return Ok(());
         };
         let binding = &self.config.hotkeys[index];
-        self.audio.apply(&binding.id, &binding.actions)
+        self.audio.apply(binding)
     }
 }
 
@@ -171,7 +173,7 @@ fn bind_ui(ui: &AppWindow) {
 
     let weak = ui.as_weak();
     ui.on_refresh_applications(move || {
-        run_ui_action(&weak, "Active audio refreshed.", |runtime| {
+        run_ui_action(&weak, "Applications refreshed.", |runtime| {
             runtime.refresh_applications()
         });
     });
@@ -194,9 +196,10 @@ fn bind_ui(ui: &AppWindow) {
                     name: format!("Hotkey {sequence}"),
                     shortcut,
                     enabled: true,
+                    toggle: false,
                     actions: vec![Action {
                         target: Target::Foreground,
-                        operation: Operation::ToggleDuck { level: 0.2 },
+                        operation: Operation::Set { level: 0.5 },
                     }],
                 });
             })
@@ -205,6 +208,10 @@ fn bind_ui(ui: &AppWindow) {
 
     let weak = ui.as_weak();
     ui.on_remove_hotkey(move |index| {
+        if let Some(ui) = weak.upgrade() {
+            ui.set_selected_hotkey(-1);
+            ui.set_selected_action(-1);
+        }
         run_ui_action(&weak, "Hotkey removed.", |runtime| {
             runtime.mutate_config(|config| {
                 if index >= 0 && (index as usize) < config.hotkeys.len() {
@@ -215,13 +222,32 @@ fn bind_ui(ui: &AppWindow) {
     });
 
     let weak = ui.as_weak();
-    ui.on_update_hotkey(move |index, name, shortcut, enabled| {
+    ui.on_update_hotkey(move |index, name, enabled, toggle| {
         run_ui_action(&weak, "Hotkey updated.", |runtime| {
             runtime.mutate_config(|config| {
                 if let Some(binding) = config.hotkeys.get_mut(index as usize) {
                     binding.name = name.to_string();
-                    binding.shortcut = shortcut.to_string();
                     binding.enabled = enabled;
+                    binding.toggle = toggle;
+                }
+            })
+        });
+    });
+
+    let weak = ui.as_weak();
+    ui.on_record_shortcut(move |text, ctrl, alt, shift, meta| {
+        let hotkey_index = weak.upgrade().map_or(-1, |ui| ui.get_selected_hotkey());
+        let Some(shortcut) = build_shortcut(text.as_str(), ctrl, alt, shift, meta) else {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_status_error(true);
+                ui.set_status_text("Unsupported key for a shortcut.".into());
+            }
+            return;
+        };
+        run_ui_action(&weak, "Shortcut recorded.", move |runtime| {
+            runtime.mutate_config(move |config| {
+                if let Some(binding) = config.hotkeys.get_mut(hotkey_index as usize) {
+                    binding.shortcut = shortcut;
                 }
             })
         });
@@ -258,6 +284,9 @@ fn bind_ui(ui: &AppWindow) {
 
     let weak = ui.as_weak();
     ui.on_remove_action(move |hotkey_index, action_index| {
+        if let Some(ui) = weak.upgrade() {
+            ui.set_selected_action(-1);
+        }
         run_ui_action(&weak, "Action removed.", |runtime| {
             runtime.mutate_config(|config| {
                 if let Some(binding) = config.hotkeys.get_mut(hotkey_index as usize)
@@ -272,7 +301,7 @@ fn bind_ui(ui: &AppWindow) {
 
     let weak = ui.as_weak();
     ui.on_update_action(
-        move |hotkey_index, action_index, target, operation, value| {
+        move |hotkey_index, action_index, target, operation, value, muted| {
             run_ui_action(&weak, "Action updated.", |runtime| {
                 runtime.mutate_config(|config| {
                     let Some(action) = config
@@ -289,7 +318,7 @@ fn bind_ui(ui: &AppWindow) {
                             executable: target.to_string(),
                         }
                     };
-                    action.operation = operation_from_ui(operation, value);
+                    action.operation = operation_from_ui(operation, value, muted);
                 })
             });
         },
@@ -331,9 +360,11 @@ fn refresh_ui(ui: &AppWindow) -> Result<()> {
         let applications = runtime
             .applications
             .iter()
-            .filter(|application| application.executable.to_ascii_lowercase().contains(&query))
-            .map(|application| ApplicationRow {
-                name: application.executable.as_str().into(),
+            .filter(|entry| matches_query(entry, &query))
+            .map(|entry| ApplicationRow {
+                display: entry.display.as_str().into(),
+                executable: entry.executable.as_str().into(),
+                running: entry.running,
             })
             .collect();
         let hotkeys = runtime
@@ -345,6 +376,7 @@ fn refresh_ui(ui: &AppWindow) -> Result<()> {
                 shortcut: binding.shortcut.as_str().into(),
                 action_count: binding.actions.len() as i32,
                 enabled: binding.enabled,
+                toggle: binding.toggle,
             })
             .collect();
         ui.set_applications(model(applications));
@@ -362,6 +394,12 @@ fn refresh_ui(ui: &AppWindow) -> Result<()> {
     })
 }
 
+fn matches_query(entry: &AppEntry, query: &str) -> bool {
+    query.is_empty()
+        || entry.display.to_ascii_lowercase().contains(query)
+        || entry.executable.to_ascii_lowercase().contains(query)
+}
+
 fn select_hotkey(ui: &AppWindow, index: i32) {
     ui.set_selected_hotkey(index);
     ui.set_selected_action(-1);
@@ -372,6 +410,7 @@ fn populate_hotkey(ui: &AppWindow, binding: &HotkeyBinding) {
     ui.set_selected_name(binding.name.as_str().into());
     ui.set_selected_shortcut(binding.shortcut.as_str().into());
     ui.set_selected_enabled(binding.enabled);
+    ui.set_selected_toggle(binding.toggle);
     ui.set_actions(model(
         binding
             .actions
@@ -400,6 +439,7 @@ fn select_action(ui: &AppWindow, index: i32) {
         let (operation, value) = operation_values(action.operation);
         ui.set_selected_operation(operation);
         ui.set_selected_value(value);
+        ui.set_selected_muted(matches!(action.operation, Operation::Mute { muted: true }));
         Ok(())
     });
 }
@@ -412,12 +452,11 @@ fn target_name(target: &Target) -> &str {
 }
 
 fn operation_name(operation: Operation) -> SharedString {
-    let (kind, value) = operation_values(operation);
-    match kind {
-        0 => format!("Set level to {value}%").into(),
-        1 => format!("Adjust level by {value}%").into(),
-        2 => "Toggle mute".into(),
-        _ => format!("Toggle duck at {value}%").into(),
+    match operation {
+        Operation::Set { level } => format!("Set level to {}%", percent(level)).into(),
+        Operation::Adjust { delta } => format!("Adjust level by {}%", percent(delta)).into(),
+        Operation::Mute { muted: true } => "Mute".into(),
+        Operation::Mute { muted: false } => "Unmute".into(),
     }
 }
 
@@ -425,18 +464,16 @@ fn operation_values(operation: Operation) -> (i32, i32) {
     match operation {
         Operation::Set { level } => (0, percent(level)),
         Operation::Adjust { delta } => (1, percent(delta)),
-        Operation::ToggleMute => (2, 0),
-        Operation::ToggleDuck { level } => (3, percent(level)),
+        Operation::Mute { .. } => (2, 50),
     }
 }
 
-fn operation_from_ui(operation: i32, value: i32) -> Operation {
+fn operation_from_ui(operation: i32, value: i32, muted: bool) -> Operation {
     let level = value as f32 / 100.0;
     match operation {
-        0 => Operation::Set { level },
         1 => Operation::Adjust { delta: level },
-        2 => Operation::ToggleMute,
-        _ => Operation::ToggleDuck { level },
+        2 => Operation::Mute { muted },
+        _ => Operation::Set { level },
     }
 }
 
@@ -444,9 +481,68 @@ fn percent(value: f32) -> i32 {
     (value * 100.0).round() as i32
 }
 
+fn build_shortcut(text: &str, ctrl: bool, alt: bool, shift: bool, meta: bool) -> Option<String> {
+    let token = key_token(text)?;
+    let mut shortcut = String::new();
+    if ctrl {
+        shortcut.push_str("Ctrl+");
+    }
+    if shift {
+        shortcut.push_str("Shift+");
+    }
+    if alt {
+        shortcut.push_str("Alt+");
+    }
+    if meta {
+        shortcut.push_str("Super+");
+    }
+    shortcut.push_str(&token);
+    Some(shortcut)
+}
+
+fn key_token(text: &str) -> Option<String> {
+    let character = text.chars().next()?;
+    let named = match character {
+        '\u{F700}' => Some("Up"),
+        '\u{F701}' => Some("Down"),
+        '\u{F702}' => Some("Left"),
+        '\u{F703}' => Some("Right"),
+        '\u{0020}' => Some("Space"),
+        '\u{0008}' => Some("Backspace"),
+        '\u{0009}' => Some("Tab"),
+        '\u{000a}' | '\u{000d}' => Some("Enter"),
+        '\u{001b}' => Some("Escape"),
+        '\u{007f}' => Some("Delete"),
+        '\u{F727}' => Some("Insert"),
+        '\u{F729}' => Some("Home"),
+        '\u{F72B}' => Some("End"),
+        '\u{F72C}' => Some("PageUp"),
+        '\u{F72D}' => Some("PageDown"),
+        _ => None,
+    };
+    if let Some(named) = named {
+        return Some(named.to_owned());
+    }
+
+    if ('\u{F704}'..='\u{F71B}').contains(&character) {
+        let index = character as u32 - 0xF704 + 1;
+        return Some(format!("F{index}"));
+    }
+
+    if character.is_ascii_alphanumeric() {
+        return Some(character.to_ascii_uppercase().to_string());
+    }
+
+    if "`-=[]\\;',./".contains(character) {
+        return Some(character.to_string());
+    }
+
+    None
+}
+
 fn next_shortcut(config: &Config) -> String {
-    (1..=12)
-        .map(|key| format!("Ctrl+Alt+F{key}"))
+    ('A'..='Z')
+        .map(|key| format!("Ctrl+Alt+{key}"))
         .find(|candidate| {
             config
                 .hotkeys
