@@ -22,17 +22,12 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 use windows::core::{Interface, PWSTR};
 
-use crate::config::{Action, Operation, Target};
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AudioApplication {
-    pub executable: String,
-}
+use crate::config::{HotkeyBinding, Operation, Target};
 
 pub struct AudioController {
     _com: ComApartment,
     devices: IMMDeviceEnumerator,
-    ducked_levels: HashMap<DuckKey, f32>,
+    toggles: HashMap<String, HashMap<u32, SessionState>>,
 }
 
 impl AudioController {
@@ -46,18 +41,22 @@ impl AudioController {
         Ok(Self {
             _com: com,
             devices,
-            ducked_levels: HashMap::new(),
+            toggles: HashMap::new(),
         })
     }
 
-    pub fn apply(&mut self, binding_id: &str, actions: &[Action]) -> Result<()> {
+    pub fn apply(&mut self, binding: &HotkeyBinding) -> Result<()> {
         let foreground_pid = foreground_pid();
         let sessions = self.sessions()?;
 
-        for action in actions {
-            for (index, session) in sessions.iter().enumerate() {
+        if binding.toggle && self.restore_toggle(binding, &sessions)? {
+            return Ok(());
+        }
+
+        for action in &binding.actions {
+            for session in &sessions {
                 if session.matches(&action.target, foreground_pid) {
-                    self.apply_operation(binding_id, index, session, action.operation)?;
+                    session.apply(action.operation)?;
                 }
             }
         }
@@ -65,18 +64,44 @@ impl AudioController {
         Ok(())
     }
 
-    pub fn applications(&self) -> Result<Vec<AudioApplication>> {
-        let mut applications = self
+    fn restore_toggle(
+        &mut self,
+        binding: &HotkeyBinding,
+        sessions: &[AudioSession],
+    ) -> Result<bool> {
+        if let Some(snapshot) = self.toggles.remove(&binding.id) {
+            for session in sessions {
+                if let Some(state) = snapshot.get(&session.pid) {
+                    session.restore(*state)?;
+                }
+            }
+            return Ok(true);
+        }
+
+        let foreground_pid = foreground_pid();
+        let mut snapshot = HashMap::new();
+        for action in &binding.actions {
+            for session in sessions {
+                if session.matches(&action.target, foreground_pid)
+                    && !snapshot.contains_key(&session.pid)
+                {
+                    snapshot.insert(session.pid, session.capture()?);
+                }
+            }
+        }
+        self.toggles.insert(binding.id.clone(), snapshot);
+        Ok(false)
+    }
+
+    pub fn applications(&self) -> Result<Vec<String>> {
+        let mut executables = self
             .sessions()?
             .into_iter()
             .filter_map(|session| session.executable)
-            .map(|executable| AudioApplication { executable })
             .collect::<Vec<_>>();
-        applications
-            .sort_unstable_by_key(|application| application.executable.to_ascii_lowercase());
-        applications
-            .dedup_by(|left, right| left.executable.eq_ignore_ascii_case(&right.executable));
-        Ok(applications)
+        executables.sort_unstable_by_key(|executable| executable.to_ascii_lowercase());
+        executables.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+        Ok(executables)
     }
 
     fn sessions(&self) -> Result<Vec<AudioSession>> {
@@ -121,35 +146,6 @@ impl AudioController {
 
         Ok(sessions)
     }
-
-    fn apply_operation(
-        &mut self,
-        binding_id: &str,
-        session_index: usize,
-        session: &AudioSession,
-        operation: Operation,
-    ) -> Result<()> {
-        match operation {
-            Operation::Set { level } => session.set_level(level),
-            Operation::Adjust { delta } => session.adjust(delta),
-            Operation::ToggleMute => session.toggle_mute(),
-            Operation::ToggleDuck { level } => {
-                let key = DuckKey {
-                    binding_id: binding_id.to_owned(),
-                    pid: session.pid,
-                    session_index,
-                };
-                if let Some(previous) = self.ducked_levels.remove(&key) {
-                    session.set_level(previous)
-                } else {
-                    let previous = session.level()?;
-                    session.set_level(level)?;
-                    self.ducked_levels.insert(key, previous);
-                    Ok(())
-                }
-            }
-        }
-    }
 }
 
 struct AudioSession {
@@ -169,6 +165,26 @@ impl AudioSession {
         }
     }
 
+    fn apply(&self, operation: Operation) -> Result<()> {
+        match operation {
+            Operation::Set { level } => self.set_level(level),
+            Operation::Adjust { delta } => self.adjust(delta),
+            Operation::Mute { muted } => self.set_mute(muted),
+        }
+    }
+
+    fn capture(&self) -> Result<SessionState> {
+        Ok(SessionState {
+            level: self.level()?,
+            muted: self.muted()?,
+        })
+    }
+
+    fn restore(&self, state: SessionState) -> Result<()> {
+        self.set_level(state.level)?;
+        self.set_mute(state.muted)
+    }
+
     fn level(&self) -> Result<f32> {
         unsafe { self.volume.GetMasterVolume() }.context("failed to read application volume")
     }
@@ -185,20 +201,22 @@ impl AudioSession {
         self.set_level(self.level()? + delta)
     }
 
-    fn toggle_mute(&self) -> Result<()> {
-        let muted = unsafe { self.volume.GetMute() }
+    fn muted(&self) -> Result<bool> {
+        Ok(unsafe { self.volume.GetMute() }
             .context("failed to read application mute state")?
-            .as_bool();
-        unsafe { self.volume.SetMute(!muted, std::ptr::null()) }
+            .as_bool())
+    }
+
+    fn set_mute(&self, muted: bool) -> Result<()> {
+        unsafe { self.volume.SetMute(muted, std::ptr::null()) }
             .context("failed to set application mute state")
     }
 }
 
-#[derive(Hash, PartialEq, Eq)]
-struct DuckKey {
-    binding_id: String,
-    pid: u32,
-    session_index: usize,
+#[derive(Clone, Copy)]
+struct SessionState {
+    level: f32,
+    muted: bool,
 }
 
 struct ComApartment;
