@@ -1,123 +1,187 @@
-import { Button, TextEdit } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, ListView, SpinBox } from "std-widgets.slint";
+
+export struct ApplicationRow { name: string }
+export struct HotkeyRow { name: string, shortcut: string, action-count: int, enabled: bool }
+export struct ActionRow { target: string, operation: string }
 
 export component AppWindow inherits Window {
     title: "VOLE";
-    width: 820px;
-    height: 620px;
-    background: #100d18;
+    width: 1080px;
+    height: 700px;
+    background: #0d1017;
 
-    in property <string> config-text;
+    in property <[ApplicationRow]> applications;
+    in property <[HotkeyRow]> hotkeys;
+    in property <[ActionRow]> actions;
+    in property <int> selected-hotkey: -1;
+    in property <int> selected-action: -1;
+    in property <string> selected-name;
+    in property <string> selected-shortcut;
+    in property <bool> selected-enabled;
+    in property <string> selected-target;
+    in property <int> selected-operation;
+    in property <int> selected-value: 20;
     in property <string> status-text: "Ready";
     in property <bool> status-error: false;
-    callback save(string);
-    callback reset;
+
+    callback search-applications(string);
+    callback refresh-applications;
+    callback select-hotkey(int);
+    callback add-hotkey;
+    callback remove-hotkey(int);
+    callback update-hotkey(int, string, string, bool);
+    callback select-action(int);
+    callback add-action(string);
+    callback remove-action(int, int);
+    callback update-action(int, int, string, int, int);
 
     VerticalLayout {
-        padding: 28px;
-        spacing: 18px;
+        padding: 22px;
+        spacing: 16px;
 
         HorizontalLayout {
             vertical-stretch: 0;
-            spacing: 16px;
-
+            spacing: 14px;
             Rectangle {
-                width: 54px;
-                height: 54px;
-                border-radius: 16px;
-                background: #9d6cff;
-
-                Text {
-                    text: "V";
-                    color: #100d18;
-                    font-size: 30px;
-                    font-weight: 800;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
+                width: 46px; height: 46px; border-radius: 13px; background: #a779ff;
+                Text { text: "V"; color: #0d1017; font-size: 27px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
             }
-
             VerticalLayout {
-                spacing: 2px;
-                Text {
-                    text: "Volume Output Level Executioner";
-                    color: #f8f5ff;
-                    font-size: 24px;
-                    font-weight: 700;
-                }
-                Text {
-                    text: "Hotkeys that put every app exactly where you want it.";
-                    color: #a9a2b9;
-                    font-size: 14px;
-                }
+                spacing: 1px;
+                Text { text: "VOLE signal deck"; color: #f5f1ff; font-size: 23px; font-weight: 700; }
+                Text { text: "Route one keypress across every application that matters."; color: #9299a8; font-size: 13px; }
             }
-        }
-
-        Rectangle {
-            vertical-stretch: 1;
-            border-radius: 18px;
-            background: #1a1625;
-            border-width: 1px;
-            border-color: #302943;
-
-            VerticalLayout {
-                padding: 18px;
-                spacing: 12px;
-
-                HorizontalLayout {
-                    vertical-stretch: 0;
-                    Text {
-                        text: "Hotkey configuration";
-                        color: #f8f5ff;
-                        font-size: 16px;
-                        font-weight: 700;
-                    }
-                    Text {
-                        text: "JSON · changes apply immediately";
-                        color: #756e84;
-                        font-size: 12px;
-                        horizontal-alignment: right;
-                    }
-                }
-
-                config-editor := TextEdit {
-                    text: root.config-text;
-                    font-family: "Consolas";
-                    font-size: 13px;
-                    wrap: word-wrap;
-                }
+            Rectangle { horizontal-stretch: 1; }
+            Rectangle {
+                width: 230px; height: 36px; border-radius: 10px;
+                background: root.status-error ? #381923 : #132d27;
+                Text { x: 12px; width: parent.width - 24px; text: root.status-text; color: root.status-error ? #ff9eb0 : #87dfbd; font-size: 11px; overflow: elide; vertical-alignment: center; }
             }
         }
 
         HorizontalLayout {
-            vertical-stretch: 0;
-            spacing: 12px;
+            spacing: 14px;
 
             Rectangle {
-                horizontal-stretch: 1;
-                border-radius: 10px;
-                background: root.status-error ? #3a1724 : #172d27;
-                min-height: 38px;
-
-                Text {
-                    text: root.status-text;
-                    color: root.status-error ? #ff9cad : #8de0bf;
-                    font-size: 12px;
-                    overflow: elide;
-                    vertical-alignment: center;
-                    x: 12px;
-                    width: parent.width - 24px;
+                width: 260px; border-radius: 16px; background: #141923; border-width: 1px; border-color: #252c39;
+                VerticalLayout {
+                    padding: 14px; spacing: 10px;
+                    HorizontalLayout {
+                        vertical-stretch: 0;
+                        Text { text: "Active audio"; color: #f5f1ff; font-size: 15px; font-weight: 700; }
+                        Button { text: "↻"; clicked => { root.refresh-applications(); } }
+                    }
+                    LineEdit { placeholder-text: "Search applications"; edited(value) => { root.search-applications(value); } }
+                    Text { text: "Choose an app to add it to the selected hotkey."; color: #747d8e; font-size: 11px; wrap: word-wrap; vertical-stretch: 0; }
+                    Rectangle {
+                        height: 42px; border-radius: 10px; background: #222938;
+                        Text { x: 12px; text: "Focused application"; color: #dcd5ea; vertical-alignment: center; }
+                        TouchArea { clicked => { root.add-action(""); } }
+                    }
+                    ListView {
+                        for app in root.applications: Rectangle {
+                            height: 40px; border-radius: 9px; background: app-touch.has-hover ? #292f40 : transparent;
+                            Text { x: 12px; width: parent.width - 24px; text: app.name; color: #bdc3d0; overflow: elide; vertical-alignment: center; }
+                            app-touch := TouchArea { clicked => { root.add-action(app.name); } }
+                        }
+                    }
                 }
             }
 
-            Button {
-                text: "Reset";
-                clicked => { root.reset(); }
+            Rectangle {
+                width: 280px; border-radius: 16px; background: #141923; border-width: 1px; border-color: #252c39;
+                VerticalLayout {
+                    padding: 14px; spacing: 10px;
+                    HorizontalLayout {
+                        vertical-stretch: 0;
+                        Text { text: "Hotkeys"; color: #f5f1ff; font-size: 15px; font-weight: 700; }
+                        Button { text: "+ New"; clicked => { root.add-hotkey(); } }
+                    }
+                    ListView {
+                        for binding[index] in root.hotkeys: Rectangle {
+                            height: 72px; border-radius: 11px;
+                            background: index == root.selected-hotkey ? #2b2142 : (binding-touch.has-hover ? #202633 : transparent);
+                            VerticalLayout {
+                                padding: 10px; spacing: 4px;
+                                Text { text: binding.name; color: #eee9f8; font-size: 13px; font-weight: 600; overflow: elide; }
+                                HorizontalLayout {
+                                    Text { text: binding.shortcut; color: #ae83ff; font-family: "Consolas"; font-size: 11px; }
+                                    Text { text: binding.action-count + (binding.action-count == 1 ? " action" : " actions"); color: #737c8d; font-size: 10px; horizontal-alignment: right; }
+                                }
+                            }
+                            binding-touch := TouchArea { clicked => { root.select-hotkey(index); } }
+                        }
+                    }
+                }
             }
 
-            Button {
-                text: "Save & activate";
-                primary: true;
-                clicked => { root.save(config-editor.text); }
+            Rectangle {
+                horizontal-stretch: 1; border-radius: 16px; background: #171c27; border-width: 1px; border-color: #293140;
+                VerticalLayout {
+                    padding: 18px; spacing: 14px;
+                    if root.selected-hotkey < 0: VerticalLayout {
+                        Text { text: "Build your first signal chain"; color: #f5f1ff; font-size: 20px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                        Text { text: "Create a hotkey, then choose applications from the live audio list."; color: #858e9e; font-size: 13px; horizontal-alignment: center; }
+                        Button { text: "Create hotkey"; primary: true; clicked => { root.add-hotkey(); } }
+                    }
+                    if root.selected-hotkey >= 0: VerticalLayout {
+                        spacing: 13px;
+                        Text { text: "Hotkey details"; color: #f5f1ff; font-size: 16px; font-weight: 700; }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            name-field := LineEdit { text: root.selected-name; placeholder-text: "Name"; }
+                            shortcut-field := LineEdit { text: root.selected-shortcut; placeholder-text: "Ctrl+Alt+D"; font-family: "Consolas"; }
+                            enabled-field := CheckBox { text: "Enabled"; checked: root.selected-enabled; }
+                            Button { text: "Apply"; primary: true; clicked => { root.update-hotkey(root.selected-hotkey, name-field.text, shortcut-field.text, enabled-field.checked); } }
+                            Button { text: "Delete"; clicked => { root.remove-hotkey(root.selected-hotkey); } }
+                        }
+
+                        Rectangle { height: 1px; background: #2a3240; }
+                        Text { text: "Signal chain"; color: #f5f1ff; font-size: 15px; font-weight: 700; }
+                        Text { text: "Each row runs from top to bottom when the shortcut fires."; color: #747d8e; font-size: 11px; }
+
+                        Rectangle {
+                            vertical-stretch: 1; border-radius: 12px; background: #10151e;
+                            ListView {
+                                for action[index] in root.actions: Rectangle {
+                                    height: 58px; border-radius: 10px;
+                                    background: index == root.selected-action ? #2c2440 : (action-touch.has-hover ? #202735 : transparent);
+                                    HorizontalLayout {
+                                        padding: 11px; spacing: 10px;
+                                        Rectangle { width: 8px; height: 8px; border-radius: 4px; background: #a779ff; }
+                                        VerticalLayout {
+                                            Text { text: action.target; color: #e7e1f0; font-size: 13px; font-weight: 600; overflow: elide; }
+                                            Text { text: action.operation; color: #8c96a8; font-size: 11px; }
+                                        }
+                                        Text { text: "›"; color: #a779ff; font-size: 20px; vertical-alignment: center; }
+                                    }
+                                    action-touch := TouchArea { clicked => { root.select-action(index); } }
+                                }
+                            }
+                        }
+
+                        if root.selected-action >= 0: Rectangle {
+                            height: 92px; border-radius: 12px; background: #222936;
+                            HorizontalLayout {
+                                padding: 12px; spacing: 10px;
+                                VerticalLayout {
+                                    Text { text: "Target"; color: #737d8f; font-size: 10px; }
+                                    target-field := LineEdit { text: root.selected-target; placeholder-text: "Discord.exe or Focused application"; }
+                                }
+                                VerticalLayout {
+                                    Text { text: "Operation"; color: #737d8f; font-size: 10px; }
+                                    operation-field := ComboBox { model: ["Set level", "Adjust level", "Toggle mute", "Toggle duck"]; current-index: root.selected-operation; }
+                                }
+                                VerticalLayout {
+                                    Text { text: operation-field.current-index == 1 ? "Change %" : "Level %"; color: #737d8f; font-size: 10px; }
+                                    value-field := SpinBox { value: root.selected-value; minimum: operation-field.current-index == 1 ? -100 : 0; maximum: 100; enabled: operation-field.current-index != 2; }
+                                }
+                                Button { text: "Save action"; primary: true; clicked => { root.update-action(root.selected-hotkey, root.selected-action, target-field.text, operation-field.current-index, value-field.value); } }
+                                Button { text: "Remove"; clicked => { root.remove-action(root.selected-hotkey, root.selected-action); } }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
