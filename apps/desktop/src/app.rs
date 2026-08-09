@@ -33,16 +33,16 @@ pub fn run() -> Result<()> {
     bind_ui(&ui);
     refresh_ui(&ui)?;
 
-    // Hotkey and tray events are drained from their channels by a timer running
-    // on the Slint event loop, rather than through each crate's push handler.
-    // Those handlers are stored in a `OnceCell` that locks to the first value it
-    // sees, so a single early event can silently prevent the handler from ever
-    // being installed. Polling the channel from the UI thread avoids that race
-    // and keeps all dispatch on one thread.
+    // Hotkey and tray events are delivered on dedicated listener threads that
+    // block on their global channels and forward each event to the UI thread
+    // via invoke_from_event_loop. This wakes the event loop even while the
+    // window is hidden to the tray, so global hotkeys and the tray menu keep
+    // working after the window is closed. A polling Slint timer cannot do this:
+    // it stops firing once the window is no longer visible.
     #[cfg(windows)]
     let (tray, open_id, quit_id) = create_tray(&ui)?;
     #[cfg(windows)]
-    let _event_pump = spawn_event_pump(&ui, open_id, quit_id);
+    let _listeners = spawn_listeners(&ui, open_id, quit_id);
 
     ui.window()
         .on_close_requested(|| slint::CloseRequestResponse::HideWindow);
@@ -801,40 +801,48 @@ fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
 }
 
 #[cfg(windows)]
-fn spawn_event_pump(
+fn spawn_listeners(
     ui: &AppWindow,
     open_id: tray_icon::menu::MenuId,
     quit_id: tray_icon::menu::MenuId,
-) -> slint::Timer {
+) -> (std::thread::JoinHandle<()>, std::thread::JoinHandle<()>) {
     use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
-    use std::time::Duration;
     use tray_icon::menu::MenuEvent;
 
+    // Global hotkeys: forward each press to the UI thread for dispatch.
     let weak = ui.as_weak();
-    let timer = slint::Timer::default();
-    // The callback runs on the Slint event loop thread, so it can touch the
-    // thread-local runtime and the UI directly without invoke_from_event_loop.
-    timer.start(
-        slint::TimerMode::Repeated,
-        Duration::from_millis(100),
-        move || {
-            while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
-                if event.state == HotKeyState::Pressed {
-                    dispatch_hotkey(&weak, event.id);
-                }
+    let hotkeys = std::thread::spawn(move || {
+        while let Ok(event) = GlobalHotKeyEvent::receiver().recv() {
+            if event.state != HotKeyState::Pressed {
+                continue;
             }
-            while let Ok(event) = MenuEvent::receiver().try_recv() {
-                if event.id == open_id {
+            let weak = weak.clone();
+            let id = event.id;
+            let _ = slint::invoke_from_event_loop(move || dispatch_hotkey(&weak, id));
+        }
+    });
+
+    // Tray menu: open restores the window, quit ends the event loop.
+    let weak = ui.as_weak();
+    let tray = std::thread::spawn(move || {
+        while let Ok(event) = MenuEvent::receiver().recv() {
+            let weak = weak.clone();
+            let open_id = open_id.clone();
+            let quit_id = quit_id.clone();
+            let id = event.id;
+            let _ = slint::invoke_from_event_loop(move || {
+                if id == open_id {
                     if let Some(ui) = weak.upgrade() {
                         let _ = ui.show();
                     }
-                } else if event.id == quit_id {
+                } else if id == quit_id {
                     let _ = slint::quit_event_loop();
                 }
-            }
-        },
-    );
-    timer
+            });
+        }
+    });
+
+    (hotkeys, tray)
 }
 
 #[cfg(windows)]

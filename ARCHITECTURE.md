@@ -103,9 +103,12 @@ OS message loops or threads.
 Both `global-hotkey` and `tray-icon` expose a push handler stored in a process-wide `OnceCell`
 that locks to the first value it sees; a single event arriving before the handler is installed
 silently prevents it from ever being registered. To avoid that race, VOLE ignores the push handlers
-and instead drains both event channels from a short repeating Slint timer that runs on the loop
-thread, so all dispatch stays single-threaded. The timer only performs a couple of non-blocking
-channel reads, so idle CPU stays effectively zero.
+and instead blocks on both event channels from two dedicated listener threads. Each forwards its
+events to the main thread with `slint::invoke_from_event_loop`, which wakes the event loop even
+while the window is hidden to the tray. Dispatch itself still runs on the loop thread, so it stays
+single-threaded; the listeners only block on a channel `recv`, so idle CPU stays effectively zero.
+A polling timer on the loop thread was tried first but stops firing once the window is hidden, which
+left global hotkeys and the tray menu dead after the window was closed.
 
 ### Modules
 
