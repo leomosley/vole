@@ -1,0 +1,511 @@
+---
+// The base shell for every VOLE page. Sober early-2000s "webmaster" palette
+// (silver, beige, navy) on the page itself. All the neon lives in the popups.
+type Props = {
+  title: string;
+  tagline?: string;
+  active?: "home" | "docs";
+};
+
+const { title, tagline, active = "home" } = Astro.props;
+
+// Professional social/OG card, deliberately unlike the retro page itself.
+const ogDescription =
+  "Per-app volume control with global hotkeys for Windows. A tiny Rust tray app: single-digit MB RAM, ~0% idle CPU.";
+const ogImage = new URL("/og.png", Astro.site ?? Astro.url).href;
+const canonical = new URL(Astro.url.pathname, Astro.site ?? Astro.url).href;
+
+const nav = [
+  { href: "/", label: "Home", key: "home" as const },
+  { href: "/docs", label: "Docs / FAQ", key: "docs" as const },
+  {
+    href: "https://github.com/leomosley/vole",
+    label: "Source Code",
+    key: "src" as const,
+  },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="/favicon.ico" />
+    <title>{title}</title>
+    <meta name="description" content={ogDescription} />
+    <link rel="canonical" href={canonical} />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="VOLE" />
+    <meta
+      property="og:title"
+      content="VOLE — Volume Output Level Executioner"
+    />
+    <meta property="og:description" content={ogDescription} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="VOLE — per-app volume control with global hotkeys for Windows"
+    />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="VOLE — Volume Output Level Executioner"
+    />
+    <meta name="twitter:description" content={ogDescription} />
+    <meta name="twitter:image" content={ogImage} />
+  </head>
+  <body>
+    <div class="scanlines" aria-hidden="true"></div>
+
+    <marquee class="ticker" scrollamount="8" behavior="scroll" direction="left">
+      &#9733; WELCOME TO VOLE.EXE &#9733; the #1 VOLUME OUTPUT LEVEL EXECUTIONER
+      on the WEB &#9733; 100% VIRUS FREE (trust me bro) &#9733; NOW WITH GLOBAL
+      HOTKEYS &#9733; sign my guestbook &#9733; best viewed in Internet Explorer
+      6 at 800x600 &#9733; you are visitor #000001337 &#9733;
+    </marquee>
+
+    <header class="masthead">
+      <a class="brand" href="/" data-blip>
+        <img src="/vole.png" alt="VOLE mascot" width="72" height="72" />
+        <span>
+          <span class="brand__word">VOLE</span>
+          <small>Volume Output Level Executioner</small>
+        </span>
+      </a>
+      <div class="masthead__meta">
+        <span class="badge badge--blink">v-LATEST</span>
+        <button type="button" class="soundbtn" data-sound-toggle data-blip>
+          <span data-sound-state>SOUND: ON</span>
+        </button>
+      </div>
+    </header>
+
+    <nav class="navbar">
+      {
+        nav.map((item) => (
+          <a
+            href={item.href}
+            class:list={[
+              "navbar__link",
+              { "navbar__link--active": item.key === active },
+            ]}
+            data-blip
+          >
+            {item.label}
+          </a>
+        ))
+      }
+    </nav>
+
+    {
+      tagline && (
+        <div class="subtagline">
+          <blink>{tagline}</blink>
+        </div>
+      )
+    }
+
+    <main class="shell">
+      <slot />
+    </main>
+
+    <footer class="colophon">
+      <img src="/vole.png" alt="" width="40" height="40" />
+      <div>
+        <p>
+          &copy; 2026 leomosley. Windows&reg; only. Not affiliated with any
+          actual mole, vole, or rodent. <a href="/docs">How does it work?</a>
+        </p>
+        <p class="colophon__buttons">
+          <span class="88x31">BEST VIEWED<br />IN ANY BROWSER</span>
+          <span class="88x31 88x31--alt">MADE WITH<br />&lt;/RUST&gt;</span>
+          <span class="88x31 88x31--warn">NO&nbsp;FLASH<br />REQUIRED</span>
+          <a
+            class="88x31 88x31--link"
+            href="https://github.com/leomosley/vole"
+            data-blip
+          >
+            GET THE<br />SOURCE
+          </a>
+        </p>
+      </div>
+    </footer>
+
+    <script>
+      import { initChaos } from "../scripts/chaos";
+      initChaos();
+    </script>
+
+    <style is:global>
+      :root {
+        --ink: #1a1a2e;
+        --paper: #d9d5c8;
+        --silver: #c0c0c0;
+        --silver-dark: #808080;
+        --navy: #000080;
+        --link: #0000ee;
+        --visited: #551a8b;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        position: relative;
+        font-family: "Times New Roman", Georgia, serif;
+        color: var(--ink);
+        background-color: #6b7b8c;
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+        background-size: 24px 24px;
+        overflow-x: hidden;
+      }
+
+      a {
+        color: var(--link);
+      }
+      a:visited {
+        color: var(--visited);
+      }
+
+      blink,
+      .blink {
+        animation: blink 1s steps(1) infinite;
+      }
+      @keyframes blink {
+        50% {
+          opacity: 0;
+        }
+      }
+
+      .scanlines {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 9998;
+        background: repeating-linear-gradient(
+          transparent 0,
+          transparent 2px,
+          rgba(0, 0, 0, 0.05) 3px
+        );
+      }
+
+      /* ---- ticker ---- */
+      .ticker {
+        background: #000080;
+        color: #ffff00;
+        font-family: "Courier New", monospace;
+        font-weight: bold;
+        letter-spacing: 1px;
+        padding: 4px 0;
+        border-bottom: 2px solid #000;
+      }
+
+      /* ---- masthead ---- */
+      .masthead {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 16px;
+        background: linear-gradient(#efece2, #cdc8b8);
+        border-bottom: 3px double var(--silver-dark);
+        flex-wrap: wrap;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        text-decoration: none;
+        color: var(--ink);
+      }
+      .brand img {
+        image-rendering: pixelated;
+        filter: drop-shadow(2px 2px 0 rgba(0, 0, 0, 0.35));
+      }
+      .brand__word {
+        display: block;
+        font-family: "Impact", "Arial Black", sans-serif;
+        font-size: 42px;
+        letter-spacing: 3px;
+        line-height: 1;
+        color: var(--navy);
+        text-shadow: 2px 2px 0 #b0b0b0;
+      }
+      .brand small {
+        display: block;
+        font-size: 12px;
+        letter-spacing: 1px;
+        color: #444;
+      }
+      .masthead__meta {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .badge {
+        background: #cc0000;
+        color: #fff;
+        font-family: "Courier New", monospace;
+        font-weight: bold;
+        padding: 3px 8px;
+        border: 2px outset #ff6a6a;
+      }
+      .badge--blink {
+        animation: blink 0.8s steps(1) infinite;
+      }
+      .soundbtn {
+        font-family: "Courier New", monospace;
+        font-weight: bold;
+        background: var(--silver);
+        border: 2px outset #fff;
+        padding: 4px 8px;
+        cursor: pointer;
+      }
+      .soundbtn:active {
+        border-style: inset;
+      }
+
+      /* ---- navbar ---- */
+      .navbar {
+        display: flex;
+        gap: 2px;
+        padding: 6px 16px;
+        background: var(--silver);
+        border-bottom: 2px solid var(--silver-dark);
+        flex-wrap: wrap;
+      }
+      .navbar__link {
+        font-family: "Courier New", monospace;
+        font-weight: bold;
+        text-decoration: none;
+        color: var(--navy);
+        background: linear-gradient(#fff, #dcdcdc);
+        border: 2px outset #fff;
+        padding: 5px 14px;
+      }
+      .navbar__link:hover {
+        background: #ffffcc;
+      }
+      .navbar__link--active {
+        border-style: inset;
+        background: #ffffaa;
+      }
+
+      .subtagline {
+        text-align: center;
+        padding: 8px;
+        background: #000;
+        color: #00ff00;
+        font-family: "Courier New", monospace;
+        font-size: 18px;
+        letter-spacing: 2px;
+      }
+
+      /* ---- shell / content ---- */
+      .shell {
+        max-width: 960px;
+        margin: 18px auto;
+        padding: 0 14px 40px;
+      }
+
+      .panel {
+        background: var(--paper);
+        border: 3px ridge var(--silver);
+        box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.35);
+        padding: 16px 18px;
+        margin-bottom: 22px;
+      }
+      .panel > h2:first-child {
+        margin-top: 0;
+      }
+      .panel h2 {
+        font-family: "Impact", "Arial Black", sans-serif;
+        letter-spacing: 1px;
+        color: var(--navy);
+        border-bottom: 2px solid var(--silver-dark);
+        padding-bottom: 4px;
+      }
+      .panel h3 {
+        font-family: "Arial", sans-serif;
+        color: #7a0000;
+      }
+      .panel p,
+      .panel li {
+        font-size: 17px;
+        line-height: 1.5;
+      }
+
+      /* ---- footer ---- */
+      .colophon {
+        display: flex;
+        gap: 14px;
+        align-items: flex-start;
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 16px 14px 60px;
+        color: #eaeaea;
+      }
+      .colophon p {
+        margin: 0 0 8px;
+        font-size: 13px;
+      }
+      .colophon a {
+        color: #ffff66;
+      }
+      .colophon__buttons {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .\38 8x31 {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        width: 88px;
+        height: 31px;
+        font-family: "Courier New", monospace;
+        font-size: 9px;
+        font-weight: bold;
+        line-height: 1.1;
+        color: #fff;
+        background: #333;
+        border: 1px solid #000;
+        text-decoration: none;
+      }
+      .\38 8x31--alt {
+        background: #b8860b;
+      }
+      .\38 8x31--warn {
+        background: #8b0000;
+      }
+      .\38 8x31--link {
+        background: #000080;
+        color: #ffff66;
+      }
+
+      /* ---- flying logos ---- */
+      .chaos-flyer {
+        position: fixed;
+        top: 0;
+        left: 0;
+        z-index: 3000;
+        pointer-events: none;
+        image-rendering: pixelated;
+        filter: drop-shadow(2px 2px 0 rgba(0, 0, 0, 0.4));
+        will-change: transform;
+      }
+
+      /* ---- popups (the only place neon is allowed) ---- */
+      .chaos-popup {
+        position: fixed;
+        width: 340px;
+        font-family: "Arial", sans-serif;
+        border: 3px outset #fff;
+        box-shadow: 6px 6px 0 rgba(0, 0, 0, 0.5);
+        background: hsl(var(--pop-hue, 300), 100%, 96%);
+        z-index: 4000;
+        animation: popin 0.18s ease-out;
+      }
+      @keyframes popin {
+        from {
+          transform: scale(0.7);
+          opacity: 0;
+        }
+      }
+      .chaos-popup__bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 4px 6px;
+        cursor: move;
+        color: #fff;
+        font-weight: bold;
+        font-family: "Courier New", monospace;
+        background: linear-gradient(
+          90deg,
+          hsl(var(--pop-hue, 300), 100%, 45%),
+          hsl(calc(var(--pop-hue, 300) + 60), 100%, 50%)
+        );
+        text-shadow: 1px 1px 0 #000;
+      }
+      .chaos-popup__title {
+        font-size: 13px;
+        padding-right: 8px;
+      }
+      .chaos-popup__x {
+        flex: 0 0 auto;
+        width: 22px;
+        height: 22px;
+        border: 2px outset #fff;
+        background: #c0c0c0;
+        color: #000;
+        font-weight: bold;
+        cursor: pointer;
+      }
+      .chaos-popup__x:active {
+        border-style: inset;
+      }
+      .chaos-popup__body {
+        padding: 12px;
+        text-align: center;
+      }
+      .chaos-popup__body p {
+        margin: 6px 0 12px;
+        font-size: 14px;
+        color: #111;
+      }
+      .chaos-popup__mascot {
+        width: 56px;
+        height: 56px;
+        image-rendering: pixelated;
+        animation: spin 3s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .chaos-popup__cta {
+        display: inline-block;
+        padding: 10px 18px;
+        font-weight: bold;
+        font-family: "Impact", sans-serif;
+        letter-spacing: 1px;
+        color: #fff;
+        text-decoration: none;
+        background: linear-gradient(#00cc00, #007a00);
+        border: 3px outset #7cff7c;
+        animation: pulse 0.7s ease-in-out infinite alternate;
+      }
+      @keyframes pulse {
+        to {
+          transform: scale(1.08);
+        }
+      }
+
+      @media (max-width: 640px) {
+        .brand__word {
+          font-size: 32px;
+        }
+        .chaos-popup {
+          width: 90vw;
+        }
+      }
+    </style>
+  </body>
+</html>
