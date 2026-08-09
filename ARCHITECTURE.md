@@ -107,15 +107,29 @@ When idle, the loop is blocked waiting for OS events, so CPU use is effectively 
 
 Single binary crate with internal modules:
 
-- `audio` — enumerate audio sessions, resolve a target to session(s), get/set volume and mute,
-  snapshot/restore state for toggle hotkeys.
-- `catalog` — build the application picker: curated common apps, installed Start Menu apps, and
-  anything currently producing audio, with running apps and common apps weighted to the top.
+- `audio` — a cross-platform core plus swappable backends. `AudioBackend` is a trait
+  (enumerate sessions, get/set volume and mute); `AudioEngine<B>` wraps a backend and owns the
+  toggle snapshot state and the dispatch logic that resolves a target to session(s) and applies an
+  operation, returning an `ApplyOutcome` describing what changed.
+  - `audio::windows_backend` — `WindowsBackend`, the Core Audio (COM) implementation, compiled
+    only on Windows.
+  - `audio::fake` — `FakeBackend`, an in-memory backend seeded with representative sessions. It is
+    always compiled (not `cfg`-gated) so both the Linux dev build and Windows integration tests can
+    drive the engine without real audio hardware.
+  - `platform_backend()` selects `WindowsBackend` on Windows and `FakeBackend` elsewhere behind the
+    `PlatformBackend` type alias, so the rest of the app is platform-agnostic.
+- `catalog` — a cross-platform core (curated common apps + `build`) that delegates OS-specific
+  enumeration to a `platform` submodule: `catalog::platform_windows` (ToolHelp running processes +
+  Start Menu `.lnk` scan) on Windows, `catalog::platform_fake` (empty impls) elsewhere.
 - `hotkeys` — register hotkeys from config, map an incoming hotkey event to its bound actions.
+  Registration and the `global-hotkey`/`tray-icon` event wiring are `#[cfg(windows)]`; on other
+  platforms `register`/`unregister` are no-ops so the app still runs.
 - `config` — load, validate, and save the JSON config; owns the typed schema.
 - `tray` — tray icon and context menu (Open config, Enable/Disable, Quit).
 - `ui` — the Slint config window, created lazily.
-- `app` — orchestrator. Owns the in-memory config and applies resolved actions to `audio`.
+- `app` — orchestrator. Owns the in-memory config and an `AudioEngine<PlatformBackend>`, and
+  exposes a single cross-platform `fire(index)` dispatch path shared by real hotkeys and the UI's
+  Test-fire button.
 - `autostart` — toggles the `HKCU\...\Run` registry key.
 
 ### Audio targeting
@@ -129,6 +143,16 @@ is sub-millisecond and this keeps behaviour robust as apps open and close.
 - **Foreground window** target: `GetForegroundWindow` -> `GetWindowThreadProcessId` -> match the
   session with that PID. If the focused app has no audio session, the action is a no-op. This
   absence is handled explicitly rather than assumed away.
+
+### Dispatch outcome and feedback
+
+Applying a hotkey returns an `ApplyOutcome { affected, restored }` rather than nothing. This makes
+the common "I pressed the key and nothing happened" case observable instead of silent: a hotkey can
+legitimately match zero sessions (the target app is not currently producing audio, or a
+`foreground` action fires while VOLE itself is focused), which previously looked identical to a
+broken binding. When `affected` is empty the UI reports "no matching audio session", and the config
+window's per-app Test-fire button runs the exact same dispatch path so a binding can be diagnosed
+without touching real hotkeys.
 
 Core Audio call chain: `IMMDeviceEnumerator` -> default render device -> `IAudioSessionManager2`
 -> `IAudioSessionEnumerator` -> per-session `IAudioSessionControl2` (for PID/name) and
@@ -223,9 +247,10 @@ option simply sets the same key.
 
 - `windows` (windows-rs) — Core Audio (COM) and foreground-window / PID lookup. Declared as a
   target-only dependency (`[target.'cfg(windows)'.dependencies]`).
-- `global-hotkey` — global hotkeys; `RegisterHotKey`-based on Windows, anti-cheat-safe.
-- `tray-icon` — tray icon and context menu.
-- `slint` (winit backend) — the animated config window.
+- `global-hotkey` — global hotkeys; `RegisterHotKey`-based on Windows, anti-cheat-safe. Target-only.
+- `tray-icon` — tray icon and context menu. Target-only.
+- `slint` (winit backend) — the animated config window. A normal dependency so the GUI builds and
+  runs on Linux too.
 - `serde` + `serde_json` — config load/save.
 
 No async runtime. The app is event-loop driven, which keeps the binary and RAM small.
@@ -286,14 +311,22 @@ private repos do. Drafts are the mechanism used here.
 
 ## Developing on Linux
 
-The desktop crate is inherently Windows-only (Core Audio, `RegisterHotKey`), so it does not build
-or run natively on Linux, and no platform-abstraction layer is maintained to change that.
+The real audio and hotkey layers are Windows-only (Core Audio, `RegisterHotKey`), but the crate is
+structured around an `AudioBackend` trait so the whole app — including the Slint config window —
+builds and runs on Linux against the in-memory `FakeBackend`. Global-hotkey and tray wiring are
+`cfg`-gated to no-ops off Windows.
 
-- **On Linux:** write code, edit and preview the Slint UI (Slint renders `.slint` files natively
-  on Linux), and develop the Astro site fully.
-- **Compile-checking:** happens in CI. Optionally, `cargo-xwin` can cross-compile to the Windows
-  target from Linux for a quick local build sanity check, with no extra code required.
-- **Functional testing:** done on a real Windows PC by downloading a draft-release build.
+- **On Linux:** `cargo run` launches the full GUI against the fake backend, so the config window,
+  app catalog rows, live level/mute readouts, and Test-fire button can all be exercised end to end.
+  The Astro site develops fully as well.
+- **Testing:** unit tests cover the `AudioEngine` dispatch (set/adjust/mute/toggle-restore/
+  foreground/process-match) and `tests/dispatch.rs` drives a GUI-style config JSON through the
+  engine, all on Linux against the fake backend.
+- **Compile-checking Windows:** `cargo clippy --target x86_64-pc-windows-gnu` (or `cargo-xwin`)
+  cross-checks the Windows-only code from Linux. Note `cargo fmt` skips `#[cfg(windows)]` modules,
+  so run `rustfmt --edition 2024` directly on `audio/windows_backend.rs` and
+  `catalog/platform_windows.rs`.
+- **Functional Windows testing:** still done on a real Windows PC via a draft-release build.
 
 ---
 
