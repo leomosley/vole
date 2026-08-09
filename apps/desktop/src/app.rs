@@ -9,9 +9,9 @@ use crate::config::{Action, Config, ConfigStore, HotkeyBinding, Operation, Targe
 use crate::{ActionRow, AppWindow, ApplicationRow, HotkeyRow};
 
 #[cfg(windows)]
-use global_hotkey::hotkey::HotKey;
+use global_hotkey::GlobalHotKeyManager;
 #[cfg(windows)]
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
+use global_hotkey::hotkey::HotKey;
 #[cfg(windows)]
 use std::collections::HashMap;
 #[cfg(windows)]
@@ -33,10 +33,16 @@ pub fn run() -> Result<()> {
     bind_ui(&ui);
     refresh_ui(&ui)?;
 
+    // Hotkey and tray events are drained from their channels by a timer running
+    // on the Slint event loop, rather than through each crate's push handler.
+    // Those handlers are stored in a `OnceCell` that locks to the first value it
+    // sees, so a single early event can silently prevent the handler from ever
+    // being installed. Polling the channel from the UI thread avoids that race
+    // and keeps all dispatch on one thread.
     #[cfg(windows)]
-    bind_hotkeys(&ui);
+    let (tray, open_id, quit_id) = create_tray(&ui)?;
     #[cfg(windows)]
-    let tray = create_tray(&ui)?;
+    let _event_pump = spawn_event_pump(&ui, open_id, quit_id);
 
     ui.window()
         .on_close_requested(|| slint::CloseRequestResponse::HideWindow);
@@ -45,11 +51,7 @@ pub fn run() -> Result<()> {
     let result = slint::run_event_loop_until_quit().context("VOLE event loop failed");
 
     #[cfg(windows)]
-    {
-        GlobalHotKeyEvent::set_event_handler::<fn(GlobalHotKeyEvent)>(None);
-        tray_icon::menu::MenuEvent::set_event_handler::<fn(tray_icon::menu::MenuEvent)>(None);
-        drop(tray);
-    }
+    drop(tray);
 
     RUNTIME.with(|slot| slot.replace(None));
     result
@@ -645,39 +647,71 @@ fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
 }
 
 #[cfg(windows)]
-fn bind_hotkeys(ui: &AppWindow) {
-    let weak = ui.as_weak();
-    GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
-        if event.state != HotKeyState::Pressed {
-            return;
-        }
+fn spawn_event_pump(
+    ui: &AppWindow,
+    open_id: tray_icon::menu::MenuId,
+    quit_id: tray_icon::menu::MenuId,
+) -> slint::Timer {
+    use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
+    use std::time::Duration;
+    use tray_icon::menu::MenuEvent;
 
-        let weak = weak.clone();
-        let id = event.id;
-        let _ = slint::invoke_from_event_loop(move || {
-            let Some(ui) = weak.upgrade() else {
-                return;
-            };
-            match with_runtime(|runtime| runtime.handle_hotkey(id)) {
-                Ok(message) if message.is_empty() => {}
-                Ok(message) => {
-                    let _ = refresh_ui(&ui);
-                    ui.set_status_error(false);
-                    ui.set_status_text(message.into());
-                }
-                Err(error) => {
-                    ui.set_status_error(true);
-                    ui.set_status_text(error.to_string().into());
+    let weak = ui.as_weak();
+    let timer = slint::Timer::default();
+    // The callback runs on the Slint event loop thread, so it can touch the
+    // thread-local runtime and the UI directly without invoke_from_event_loop.
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(100),
+        move || {
+            while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
+                if event.state == HotKeyState::Pressed {
+                    dispatch_hotkey(&weak, event.id);
                 }
             }
-        });
-    }));
+            while let Ok(event) = MenuEvent::receiver().try_recv() {
+                if event.id == open_id {
+                    if let Some(ui) = weak.upgrade() {
+                        let _ = ui.show();
+                    }
+                } else if event.id == quit_id {
+                    let _ = slint::quit_event_loop();
+                }
+            }
+        },
+    );
+    timer
 }
 
 #[cfg(windows)]
-fn create_tray(ui: &AppWindow) -> Result<tray_icon::TrayIcon> {
+fn dispatch_hotkey(weak: &slint::Weak<AppWindow>, id: u32) {
+    let Some(ui) = weak.upgrade() else {
+        return;
+    };
+    match with_runtime(|runtime| runtime.handle_hotkey(id)) {
+        Ok(message) if message.is_empty() => {}
+        Ok(message) => {
+            let _ = refresh_ui(&ui);
+            ui.set_status_error(false);
+            ui.set_status_text(message.into());
+        }
+        Err(error) => {
+            ui.set_status_error(true);
+            ui.set_status_text(error.to_string().into());
+        }
+    }
+}
+
+#[cfg(windows)]
+fn create_tray(
+    _ui: &AppWindow,
+) -> Result<(
+    tray_icon::TrayIcon,
+    tray_icon::menu::MenuId,
+    tray_icon::menu::MenuId,
+)> {
     use tray_icon::TrayIconBuilder;
-    use tray_icon::menu::{Menu, MenuEvent, MenuItem};
+    use tray_icon::menu::{Menu, MenuItem};
 
     let open = MenuItem::with_id("open", "Open VOLE", true, None);
     let quit = MenuItem::with_id("quit", "Quit", true, None);
@@ -692,23 +726,7 @@ fn create_tray(ui: &AppWindow) -> Result<tray_icon::TrayIcon> {
         .build()
         .context("failed to create tray icon")?;
 
-    let weak = ui.as_weak();
-    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-        if event.id == open_id {
-            let weak = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(ui) = weak.upgrade() {
-                    let _ = ui.show();
-                }
-            });
-        } else if event.id == quit_id {
-            let _ = slint::invoke_from_event_loop(|| {
-                let _ = slint::quit_event_loop();
-            });
-        }
-    }));
-
-    Ok(tray)
+    Ok((tray, open_id, quit_id))
 }
 
 #[cfg(windows)]

@@ -96,12 +96,16 @@ A single Slint event loop on the main thread services everything. This avoids ju
 OS message loops or threads.
 
 - `global-hotkey` registers hotkeys (it uses `RegisterHotKey` under the hood on Windows) and
-  forwards events from its hidden Win32 window to the Slint loop.
-- `tray-icon` provides the tray icon and context menu and uses the same thread's Win32 message
-  queue.
+  posts events to a channel from its hidden Win32 window.
+- `tray-icon` provides the tray icon and context menu and likewise posts menu events to a channel.
 - Slint's winit backend owns the event loop and renders the config window when it is open.
 
-When idle, the loop is blocked waiting for OS events, so CPU use is effectively zero.
+Both `global-hotkey` and `tray-icon` expose a push handler stored in a process-wide `OnceCell`
+that locks to the first value it sees; a single event arriving before the handler is installed
+silently prevents it from ever being registered. To avoid that race, VOLE ignores the push handlers
+and instead drains both event channels from a short repeating Slint timer that runs on the loop
+thread, so all dispatch stays single-threaded. The timer only performs a couple of non-blocking
+channel reads, so idle CPU stays effectively zero.
 
 ### Modules
 
