@@ -5,7 +5,7 @@ use slint::{ComponentHandle, ModelRc, VecModel};
 
 use crate::audio::{AudioEngine, PlatformBackend, SessionInfo};
 use crate::catalog::{self, AppEntry};
-use crate::config::{Action, Config, ConfigStore, HotkeyBinding, Operation, Target};
+use crate::config::{Action, Config, ConfigStore, HotkeyBinding, Operation, Target, ThemeMode};
 use crate::{ActionRow, AppWindow, ApplicationRow, HotkeyRow};
 
 #[cfg(windows)]
@@ -209,6 +209,12 @@ impl Runtime {
         Ok(())
     }
 
+    fn set_theme_mode(&mut self, theme_mode: ThemeMode) -> Result<()> {
+        self.config.theme_mode = theme_mode;
+        self.store.save(&self.config)?;
+        Ok(())
+    }
+
     // Runs a binding's actions through the audio engine. This is the single
     // dispatch path shared by real global hotkeys and the in-app test trigger.
     // Returns a human message describing what happened so silent no-ops (a
@@ -319,6 +325,16 @@ fn bind_ui(ui: &AppWindow) {
         };
         run_ui_action(&weak, message, move |runtime| {
             runtime.set_launch_on_startup(enabled)
+        });
+    });
+
+    let weak = ui.as_weak();
+    ui.on_set_theme_mode(move |mode| {
+        let Ok(theme_mode) = ThemeMode::try_from(mode) else {
+            return;
+        };
+        run_ui_action(&weak, "Theme updated.", move |runtime| {
+            runtime.set_theme_mode(theme_mode)
         });
     });
 
@@ -541,6 +557,7 @@ fn refresh_ui(ui: &AppWindow) -> Result<()> {
         ui.set_applications(model(applications));
         ui.set_hotkeys(model(hotkey_rows(runtime)));
         ui.set_launch_on_startup(runtime.config.launch_on_startup);
+        ui.set_theme_mode(runtime.config.theme_mode.as_i32());
 
         let selected = ui.get_selected_hotkey();
         if selected < 0 || selected as usize >= runtime.config.hotkeys.len() {
