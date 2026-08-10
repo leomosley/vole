@@ -50,12 +50,14 @@ jobs:
         shell: pwsh
         run: |
           gh release view "${{ steps.version.outputs.tag }}" 2>$null
-          if ($LASTEXITCODE -eq 0) {
+          $exists = $LASTEXITCODE -eq 0
+          if ($exists) {
             "exists=true" >> $env:GITHUB_OUTPUT
             Write-Host "Release ${{ steps.version.outputs.tag }} already exists; skipping."
           } else {
             "exists=false" >> $env:GITHUB_OUTPUT
           }
+          exit 0
 
       - name: Check
         if: steps.existing.outputs.exists != 'true'
