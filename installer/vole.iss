@@ -30,6 +30,7 @@ UsePreviousTasks=yes
 
 [Tasks]
 Name: "startup"; Description: "Launch VOLE when I sign in"; GroupDescription: "Startup:"; Flags: checkedonce
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "Additional icons:"; Flags: unchecked
 
 [Files]
 Source: "..\target\release\vole.exe"; DestDir: "{app}"; Flags: ignoreversion restartreplace
@@ -37,6 +38,7 @@ Source: "..\target\release\vole.exe"; DestDir: "{app}"; Flags: ignoreversion res
 [Icons]
 Name: "{group}\VOLE"; Filename: "{app}\vole.exe"
 Name: "{group}\Uninstall VOLE"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\VOLE"; Filename: "{app}\vole.exe"; Tasks: desktopicon
 
 ; Remove the legacy Run-key autostart left by older installs. Autostart is now a
 ; scheduled task, and an elevated exe launched from a Run key fails to start
