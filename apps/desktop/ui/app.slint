@@ -481,7 +481,7 @@ component StepCard inherits Rectangle {
                         background: remove-touch.has-hover ? Theme.danger-bg : transparent;
                         Text {
                             text: "✕";
-                            color: remove-touch.has-hover ? Theme.danger : Theme.text-mute;
+                            color: remove-touch.has-hover ? Theme.danger : Theme.text-dim;
                             font-size: 12px;
                             horizontal-alignment: center;
                             vertical-alignment: center;
@@ -746,11 +746,10 @@ export component AppWindow inherits Window {
                                         background: delete-touch.has-hover ? Theme.danger-bg : transparent;
                                         Text {
                                             text: "✕";
-                                            color: delete-touch.has-hover ? Theme.danger : Theme.text-mute;
+                                            color: delete-touch.has-hover ? Theme.danger : Theme.text-dim;
                                             font-size: 12px;
                                             horizontal-alignment: center;
                                             vertical-alignment: center;
-                                            visible: row-touch.has-hover || delete-touch.has-hover || index == root.selected-hotkey;
                                         }
                                         delete-touch := TouchArea {
                                             clicked => {
