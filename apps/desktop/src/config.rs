@@ -15,6 +15,7 @@ pub const CONFIG_VERSION: u32 = 2;
 pub struct Config {
     pub version: u32,
     pub launch_on_startup: bool,
+    pub theme_mode: ThemeMode,
     pub hotkeys: Vec<HotkeyBinding>,
 }
 
@@ -24,6 +25,7 @@ impl Config {
         Self {
             version: CONFIG_VERSION,
             launch_on_startup: false,
+            theme_mode: ThemeMode::System,
             hotkeys: Vec::new(),
         }
     }
@@ -50,6 +52,39 @@ impl Config {
         }
 
         Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeMode {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl ThemeMode {
+    #[must_use]
+    pub const fn as_i32(self) -> i32 {
+        match self {
+            Self::System => 0,
+            Self::Light => 1,
+            Self::Dark => 2,
+        }
+    }
+}
+
+impl TryFrom<i32> for ThemeMode {
+    type Error = ();
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::System),
+            1 => Ok(Self::Light),
+            2 => Ok(Self::Dark),
+            _ => Err(()),
+        }
     }
 }
 
@@ -404,6 +439,7 @@ mod tests {
         let path = temporary_config_path();
         let store = ConfigStore::at(path.clone());
         let config = Config {
+            theme_mode: ThemeMode::Dark,
             hotkeys: vec![binding()],
             ..Config::empty()
         };
@@ -413,6 +449,19 @@ mod tests {
         let _ = fs::remove_file(path);
 
         assert_eq!(loaded, config);
+    }
+
+    #[test]
+    fn load_should_default_missing_theme_mode_to_system() {
+        let path = temporary_config_path();
+        let store = ConfigStore::at(path.clone());
+        let config = r#"{"version":2,"launch_on_startup":false,"hotkeys":[]}"#;
+        fs::write(&path, config).expect("config should write");
+
+        let loaded = store.load().expect("config should load");
+        let _ = fs::remove_file(path);
+
+        assert_eq!(loaded.theme_mode, ThemeMode::System);
     }
 
     #[test]
