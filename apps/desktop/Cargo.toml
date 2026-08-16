@@ -21,7 +21,7 @@ thiserror.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 global-hotkey = "0.8.0"
-png = "0.17.16"
+png = "0.18.1"
 tray-icon = { version = "0.24.2", default-features = false }
 windows = { version = "0.62.2", features = [
   "Win32_Foundation",
